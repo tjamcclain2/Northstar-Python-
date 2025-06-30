@@ -1,3 +1,5 @@
+#Profiling NUmba optimized NS algorithm
+
 import math as m
 import numpy as np
 import time
