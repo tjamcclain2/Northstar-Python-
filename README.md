@@ -4,5 +4,5 @@ This branch focuses on performance testing the Northstar algorithm after its rec
 
 ## Overview
 
-Step-1: Profile the algorithm using Snakeviz (uses Cprofile and Pstats)
-Step-2: Fix the space and time complexity issues 
+- Step-1: Profile the algorithm using Snakeviz (uses Cprofile and Pstats)
+- Step-2: Fix the space and time complexity issues 
