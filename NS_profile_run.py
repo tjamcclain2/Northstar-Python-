@@ -1,3 +1,5 @@
+#Profiling code for original NS algorithm (very bad)
+
 import math as m
 import numpy as np
 import time
