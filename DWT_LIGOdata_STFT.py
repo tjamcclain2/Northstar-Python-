@@ -7,7 +7,7 @@ from scipy.signal import stft, istft
 # ============================
 # LOAD REAL STRAIN DATA
 # ============================
-strain = np.loadtxt(r"C:\\Users\\kasim\\Downloads\\L-L1_GWOSC_16KHZ_R1-1369419303-32.txt")
+strain = np.loadtxt(r"C:\\Users\\kasim\\Downloads\\H-H1_GWOSC_16KHZ_R1-1268903496-32.txt")
 
 fs = 16384  # Hz
 duration = 32  # seconds
@@ -70,17 +70,18 @@ plt.tight_layout()
 plt.show()
 
 # ============================
-# RECONSTRUCT BANDS
+# RECONSTRUCT BANDS (1 Hz bandwidth, 50-1000 Hz)
 # ============================
-bands = [(20,40), (40, 60), (60,80), (80, 100), (100, 120), (120, 140), (140, 160), (160, 180), (180, 200)]
+bands = [(hz, hz+1) for hz in range(50, 1000)]
 
-fig, axes = plt.subplots(len(bands), 1, figsize=(12, 3 * len(bands)))
+# Store all band signals in a list for combined output
+band_signals = []
+band_labels = []
+band_max_amplitudes = []
 
-if len(bands) == 1:
-    axes = [axes]
-
+# Do not plot the bands, just save them
 for i, (low, high) in enumerate(bands):
-    band_mask = (frequencies >= low) & (frequencies <= high)
+    band_mask = (frequencies >= low) & (frequencies < high)
     Zxx_band = np.zeros_like(Zxx)
     Zxx_band[band_mask, :] = Zxx[band_mask, :]
     
@@ -91,18 +92,21 @@ for i, (low, high) in enumerate(bands):
         noverlap=noverlap, 
         window='hann'
     )
-    
-    ax = axes[i]
-    ax.plot(t[:len(band_signal)], band_signal, label=f'{low}-{high} Hz Band')
-    ax.set_xlim(0, 1)
-    ax.set_xlabel("Time (s)")
-    ax.set_ylabel("Strain")
-    ax.set_title(f"Reconstructed Time Slice: {low}-{high} Hz Band")
-    ax.legend()
-    ax.grid(True, alpha=0.3)
+    band_signals.append(band_signal)
+    band_labels.append(f"{low}-{high}Hz")
+    band_max_amplitudes.append(np.max(np.abs(band_signal)))
 
-plt.tight_layout()
-plt.show()
+# Only save bands with significant strain
+max_band_amp = np.max(band_max_amplitudes)
+threshold = max_band_amp * 0.01  # Save bands with >1% of max amplitude (adjust as needed)
+
+with open("H-H1_GWOSC_16KHZ_R1-1268903496-32_bands_combined.txt", "w") as f:
+    for label, signal, amp in zip(band_labels, band_signals, band_max_amplitudes):
+        if amp > threshold:
+            f.write(f"# {label}\n")
+            np.savetxt(f, signal.reshape(-1, 1))
+            f.write("\n")
+print(f"Bands with significant strain saved to H-H1_GWOSC_16KHZ_R1-1268903496-32_bands_combined.txt (threshold: {threshold:.2e})")
 
 # ============================
 # DIAGNOSTICS
@@ -118,5 +122,5 @@ print(f"{'Total script runtime (s):':<30} {total_end_time - total_start_time:.4f
 # ============================
 # SAVE OUTPUT
 # ============================
-np.savetxt("L-L1_GWOSC_16KHZ_R1-1369419303-32_denoised.txt", denoised_strain)
-print("Denoised strain saved as: L-L1_GWOSC_16KHZ_R1-1369419303-32_denoised.txt")
+np.savetxt("H-H1_GWOSC_16KHZ_R1-1268903496-32_denoised.txt", denoised_strain)
+print("Denoised strain saved as: H-H1_GWOSC_16KHZ_R1-1268903496-32_denoised.txt")
