@@ -3,11 +3,16 @@ import matplotlib.pyplot as plt
 import pywt
 import time
 from scipy.signal import stft, istft
+import os
 
 # ============================
 # LOAD REAL STRAIN DATA
 # ============================
-strain = np.loadtxt(r"C:\\Users\\kasim\\Downloads\\H-H1_GWOSC_16KHZ_R1-1268903496-32.txt")
+input_path = r"C:\Users\kasim\Downloads\H-H1_GWOSC_16KHZ_R1-1268903496-32.txt"
+strain = np.loadtxt(input_path)
+
+# Get base name for output files
+base = os.path.splitext(os.path.basename(input_path))[0]
 
 fs = 16384  # Hz
 duration = 32  # seconds
@@ -115,8 +120,23 @@ padded_signals = [np.pad(sig, (0, maxlen - len(sig)), constant_values=np.nan) fo
 # Stack as columns and save as CSV
 csv_data = np.column_stack(padded_signals)
 header = ','.join(significant_labels)
-np.savetxt("H-H1_GWOSC_16KHZ_R1-1268903496-32_bands_significant.csv", csv_data, delimiter=",", header=header, comments='')
-print(f"Bands with significant strain saved to H-H1_GWOSC_16KHZ_R1-1268903496-32_bands_significant.csv (threshold: {threshold:.2e})")
+box_folder = r"C:\Users\kasim\Box\DWT_LIGOdata"
+csv_filename = os.path.join(box_folder, f"{base}_bands_significant.csv")
+
+# Save as binary .npz (MUCH FASTER and smaller) without normalization
+bin_filename = os.path.join(box_folder, f"{base}_bands_significant.npz")
+bin_start_time = time.time()
+np.savez(bin_filename, data=csv_data, labels=significant_labels)
+bin_end_time = time.time()
+print(f"Bands with significant strain saved to {bin_filename} (binary, fast)")
+print(f"Binary file creation time: {bin_end_time - bin_start_time:.4f} seconds")
+
+# Optionally, comment out the CSV save if you only want binary
+# csv_start_time = time.time()
+# np.savetxt(csv_filename, csv_data, delimiter=",", header=header, comments='')
+# csv_end_time = time.time()
+# print(f"Bands with significant strain saved to {csv_filename} (threshold: {threshold:.2e})")
+# print(f"CSV file creation time: {csv_end_time - csv_start_time:.4f} seconds")
 
 # ============================
 # DIAGNOSTICS
@@ -132,5 +152,6 @@ print(f"{'Total script runtime (s):':<30} {total_end_time - total_start_time:.4f
 # ============================
 # SAVE OUTPUT
 # ============================
-np.savetxt("H-H1_GWOSC_16KHZ_R1-1268903496-32_denoised.txt", denoised_strain)
-print("Denoised strain saved as: H-H1_GWOSC_16KHZ_R1-1268903496-32_denoised.txt")
+denoised_filename = f"{base}_denoised.txt"
+np.savetxt(denoised_filename, denoised_strain)
+print(f"Denoised strain saved as: {denoised_filename}")
