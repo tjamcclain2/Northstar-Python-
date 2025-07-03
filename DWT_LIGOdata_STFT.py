@@ -100,13 +100,23 @@ for i, (low, high) in enumerate(bands):
 max_band_amp = np.max(band_max_amplitudes)
 threshold = max_band_amp * 0.01  # Save bands with >1% of max amplitude (adjust as needed)
 
-with open("H-H1_GWOSC_16KHZ_R1-1268903496-32_bands_combined.txt", "w") as f:
-    for label, signal, amp in zip(band_labels, band_signals, band_max_amplitudes):
-        if amp > threshold:
-            f.write(f"# {label}\n")
-            np.savetxt(f, signal.reshape(-1, 1))
-            f.write("\n")
-print(f"Bands with significant strain saved to H-H1_GWOSC_16KHZ_R1-1268903496-32_bands_combined.txt (threshold: {threshold:.2e})")
+# Filter bands
+significant_signals = []
+significant_labels = []
+for label, signal, amp in zip(band_labels, band_signals, band_max_amplitudes):
+    if amp > threshold:
+        significant_signals.append(signal)
+        significant_labels.append(label)
+
+# Pad signals to the same length
+maxlen = max(len(sig) for sig in significant_signals)
+padded_signals = [np.pad(sig, (0, maxlen - len(sig)), constant_values=np.nan) for sig in significant_signals]
+
+# Stack as columns and save as CSV
+csv_data = np.column_stack(padded_signals)
+header = ','.join(significant_labels)
+np.savetxt("H-H1_GWOSC_16KHZ_R1-1268903496-32_bands_significant.csv", csv_data, delimiter=",", header=header, comments='')
+print(f"Bands with significant strain saved to H-H1_GWOSC_16KHZ_R1-1268903496-32_bands_significant.csv (threshold: {threshold:.2e})")
 
 # ============================
 # DIAGNOSTICS
