@@ -7,4 +7,5 @@ Performance testing: The Northstar algorithm has not be tested extensively since
 ## Overview
 
 - Step-1: Profile the algorithm using Snakeviz (uses Cprofile and Pstats) [done]
-- Step-2: Fix the space and time complexity issues 
+- Step-2: Optimize the algorithm at code level --> Goal: Make sure you have algorithmic efficiency
+- Step-3: Optimize at server-level --> Is my algorithm giving the best performance across all GPU instances?
