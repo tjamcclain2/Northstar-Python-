@@ -260,22 +260,104 @@ def gravitational_wave_ec_frame(source_angles,tt_amplitudes) :
 
 
 def change_basis_detector_to_ec(detector_angles) :
-    [latitude,longitude,orientation] = detector_angles
-    initial_detector_z_vector_earth_centered = source_vector_from_angles(detector_angles)
-    initial_detector_x_vector_earth_centered = np.array([-1*m.sin(longitude),m.cos(longitude),0])
-    initial_detector_y_vector_earth_centered = np.cross(initial_detector_z_vector_earth_centered,initial_detector_x_vector_earth_centered)
-    transpose_detector_vecs_ec = np.array([initial_detector_x_vector_earth_centered,initial_detector_y_vector_earth_centered,initial_detector_z_vector_earth_centered])
-    initial_detector_vecs_ec = np.transpose(transpose_detector_vecs_ec)
-    orientation_rotation_matrix = np.array([[m.cos(orientation),-1*m.sin(orientation),0],[m.sin(orientation),m.cos(orientation),0],[0,0,1]])
-    contravariant_transformation_matrix = np.matmul(orientation_rotation_matrix,initial_detector_vecs_ec)
-    change_basis_matrix = np.linalg.inv(contravariant_transformation_matrix)
-    return change_basis_matrix
-
-"""This function takes a list containing the latitude, longitude, and orientation a gravitational wave detector 
+    
+    """
+    Compute the covariant change-of-basis matrix from the detector frame to the Earth-centered frame. 
+    This function takes a list containing the latitude, longitude, and orientation a gravitational wave detector 
     and returns a NumPy array that effects the change-of-basis (covariant transformation matrix) from the detector frame 
     to the Earth-centered frame.
 
-"""
+    Parameters
+    ----------
+    detector_angles : array-like of float, shape (3,)
+        Three angles (in radians) defining the detector orientation in Earth-centered coordinates:
+        - latitude θ (elevation above the equatorial plane)
+        - longitude ϕ (azimuthal angle around Earth’s axis)
+        - orientation γ (rotation about the local vertical axis)
+
+    Returns
+    -------
+    change_basis_matrix : ndarray of float, shape (3, 3)
+        Covariant transformation matrix that, when applied to a tensor in the detector frame,
+        yields its components in the Earth-centered frame.
+
+    Notes
+    -----
+    1. We build an orthonormal triad of basis vectors (x̂₍det₎, ŷ₍det₎, ẑ₍det₎) in Earth coords:
+       - ẑ₍det₎ points from Earth’s center toward the detector (unit “source” vector).
+       - x̂₍det₎ points eastward tangent to Earth’s surface, given by [−sinϕ, cosϕ, 0].
+       - ŷ₍det₎ = ẑ₍det₎ × x̂₍det₎ completes the right-handed basis.
+    2. We then rotate this triad by the orientation angle γ about ẑ₍det₎:
+       Tᵢⱼ = R_z(γ) · [x̂₍det₎, ŷ₍det₎, ẑ₍det₎]₍EC₎.
+    3. The returned matrix is the inverse of Tᵢⱼ, effecting the covariant change of basis
+       (transforming basis vectors rather than components).
+
+    Examples
+    --------
+    >>> angles = [0.7854, 1.0472, 0.5236]  # θ=45°, ϕ=60°, γ=30° in radians
+    >>> M = change_basis_detector_to_ec(angles)
+    >>> M.shape
+    (3, 3)
+    >>> # Verify inverse relationship
+    >>> T = np.linalg.inv(M)
+    >>> np.allclose(T @ M, np.eye(3))
+    True
+    """
+    
+    # Original Implementation:
+    
+    # [latitude,longitude,orientation] = detector_angles
+    # initial_detector_z_vector_earth_centered = source_vector_from_angles(detector_angles)
+    # initial_detector_x_vector_earth_centered = np.array([-1*m.sin(longitude),m.cos(longitude),0])
+    # initial_detector_y_vector_earth_centered = np.cross(initial_detector_z_vector_earth_centered,initial_detector_x_vector_earth_centered)
+    # transpose_detector_vecs_ec = np.array([initial_detector_x_vector_earth_centered,initial_detector_y_vector_earth_centered,initial_detector_z_vector_earth_centered])
+    # initial_detector_vecs_ec = np.transpose(transpose_detector_vecs_ec)
+    # orientation_rotation_matrix = np.array([[m.cos(orientation),-1*m.sin(orientation),0],[m.sin(orientation),m.cos(orientation),0],[0,0,1]])
+    # contravariant_transformation_matrix = np.matmul(orientation_rotation_matrix,initial_detector_vecs_ec)
+    # change_basis_matrix = np.linalg.inv(contravariant_transformation_matrix)
+    # return change_basis_matrix
+    
+    # Abid's optimized implementation:
+    
+    # 1. Changed all math functions to use NumPy (vetorized operations) for consistency and performance
+    # 2. Shorter variable names for readability
+    # 3. I added explicit orthonormal-triad comments before each basis vector construction to label as hats in Earth coords
+        # to help see the geometry being built
+    # 4. Used np.vstack to stack vectors instead of two-step array. This is more concise, less chances of mixing up row vs col orientation, and 
+        # it clearly shows stacks these 3 vectors as columns, which is what we want for a change-of-basis matrix.
+    # 5. Streamlined rotation multiplication by using @ operator instead of np.matmul, which is more readable and idiomatic in modern NumPy
+        # plus it reads like linear algebra notation! 
+        # After comparing it using perfplot (https://github.com/nschloe/perfplot) it turns out the @ operator is actually faster than np.matmul for this case.
+    
+    
+    latitude, longitude, orientation = detector_angles
+
+    # ẑ_det points from Earth's center to detector
+    z_det_ec = source_vector_from_angles(detector_angles)
+
+    # x̂_det is tangent eastward
+    x_det_ec = np.array([-np.sin(longitude), np.cos(longitude), 0.0])
+
+    # ŷ_det completes right-handed set
+    y_det_ec = np.cross(z_det_ec, x_det_ec)
+
+    # Stack as columns to form the GW-frame basis matrix in EC coords
+    det_vecs_ec = np.vstack([x_det_ec, y_det_ec, z_det_ec]).T
+
+    # Rotate about local vertical (z_det_ec) by orientation γ
+    orientation_rotation = np.array([
+        [np.cos(orientation), -np.sin(orientation), 0.0],
+        [np.sin(orientation),  np.cos(orientation), 0.0],
+        [0.0,                  0.0,                 1.0]
+    ])
+
+    T_contravariant = orientation_rotation @ det_vecs_ec
+    
+    # Directly inverted the contravariant matrix in one line
+    change_basis_matrix = np.linalg.inv(T_contravariant)
+    return change_basis_matrix
+    
+
 #=========================================================================
 
 """
