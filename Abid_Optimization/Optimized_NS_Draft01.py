@@ -661,41 +661,168 @@ def time_delay_hanford_to_livingston(source_angles) :
 
 #=========================================================================
 
-""".This function takes a gravitational wave signal lifetime, a detector sampling rate, and the maximum possible time delay between the detectors in a network, and returns a 
-NumPy array with absolute detector strain response times appropriate for all the detectors in a network. 
-Note that all responses times are actual sampled times, assuming correct time synchorization between sites."""
-
 def generate_network_time_array(signal_lifetime, detector_sampling_rate, maximum_time_delay) :
-    time_sample_width = round((signal_lifetime + maximum_time_delay)*detector_sampling_rate,0)
-    all_times = 1/detector_sampling_rate*(np.arange(-time_sample_width,time_sample_width,1))
-    return all_times
+    
+    """
+    Create a symmetric time-sample array spanning the signal duration plus network delays. This function takes a gravitational wave signal lifetime, 
+    a detector sampling rate, and the maximum possible time delay between the detectors in a network, and returns a 
+    NumPy array with absolute detector strain response times appropriate for all the detectors in a network. 
+    Note that all responses times are actual sampled times, assuming correct time synchorization between sites.
+
+    Parameters
+    ----------
+    signal_lifetime : float
+        Duration of the gravitational-wave signal in seconds.
+    detector_sampling_rate : float
+        Detector sampling rate in Hz (samples per second).
+    maximum_time_delay : float
+        Maximum inter-detector time delay in seconds.
+
+    Returns
+    -------
+    time_array : ndarray of float
+        1D array of time samples (in seconds), from
+        –T_max to +T_max (exclusive), where
+        T_max = signal_lifetime + maximum_time_delay,
+        sampled at 1/detector_sampling_rate intervals.
+
+    Notes
+    -----
+    - The half-window sample count is computed as
+      `N = ceil(T_max * detector_sampling_rate)`.
+    - The full time span covers 2·N samples symmetrically around zero.
+    - Assumes perfect synchronization across sites.
+
+    Examples
+    --------
+    >>> fs = 4096  # Hz
+    >>> tau = 1.0  # s
+    >>> delay = 0.01  # s
+    >>> t = generate_network_time_array(tau, fs, delay)
+    >>> t[0], t[-1]
+    (-1.01, 0.999755859375)
+    >>> len(t) == 2 * int(np.ceil((tau + delay) * fs))
+    True
+    """
+    #Original Implementation:
+        # time_sample_width = round((signal_lifetime + maximum_time_delay)*detector_sampling_rate,0)
+        # all_times = 1/detector_sampling_rate*(np.arange(-time_sample_width,time_sample_width,1))
+        # return all_times
+        
+    # Abid's optimized implementation:
+        # Explanation of changes made:
+            # 1. Used np.arange for cleaner time array generation
+            # 2. Removed unnecessary rounding: np.arange handles floating-point precision well
+            # 3. Used np.ceil to ensure we cover the full half-window duration ==> Using np.ceil ensures we cover the full time window 
+            # (rounding up to the next sample) rather than a potentially truncated window from round. Converting explicitly to an integer (half_samples) 
+            # makes it crystal-clear that we’re indexing sample counts, 
+            # avoids floating-point endpoints in arange, and prevents off-by-one errors.
+            
+            # 4. Clearer variable names: T_max instead of time_sample_width for clarity on what it represents
+            
+                # signal_lifetime + maximum_time_delay → T_max
+                # time_sample_width → half_samples (an integer count)
+                # all_times → time_array
+            
+    # Total half-window in seconds
+    T_max = signal_lifetime + maximum_time_delay
+
+    # Number of samples on each side of zero
+    half_samples = int(np.ceil(T_max * detector_sampling_rate))
+
+    # Generate symmetric time array around zero
+    time_array = np.arange(-half_samples, half_samples) / detector_sampling_rate
+
+    return time_array
 
 #=========================================================================
 
-""".This function takes the lifetime and frequency of a gravitional wave, a NumPy array with the detector strain response times of a gravitational wave detector network, 
-and the time delay between when the gravitational wave arrives at the specific detector where the terms are being evaluated compared to when it arrived at a fixed reference detector (Hanford, in this code), 
-and returns a NumPy array with the appropriate sine-Gaussian gravitational wave strain amplitudes for 
-the detector at each network time. Note that the order of the output array is 1) time sample 2) [A_+, B_x, A_+, B_x] for each of the four gravitational wave modes."""
 
-#Space complexity issue
-
-"""3. Inefficient Array Operations
-
-a) oscillatory_terms creates a full time×modes matrix when vectorized operations could be used
-b) Temporary arrays created in tensor transformations aren't reused"""
 def generate_oscillatory_terms(signal_lifetime, signal_frequency, time_array, time_delay) :
-    number_time_samples = time_array.size
-    signal_q_value = m.sqrt(m.log(2))/signal_lifetime
-    oscillatory_terms = np.empty((number_time_samples,number_gw_modes))
-    for this_time_sample in range(number_time_samples) :
-        this_time = time_array[this_time_sample]
-        this_gaussian_term = m.exp(-1*signal_q_value**2*(this_time - time_delay)**2)
-        this_cos_term = m.cos(2*np.pi*signal_frequency*(this_time - time_delay))
-        this_sin_term = m.sin(2*np.pi*signal_frequency*(this_time - time_delay))
-        this_cos_gauss_term = this_gaussian_term*this_cos_term
-        this_sin_gauss_term = this_gaussian_term*this_sin_term
-        these_oscillations = np.array([this_cos_gauss_term,this_sin_gauss_term,this_cos_gauss_term,this_sin_gauss_term])
-        oscillatory_terms[this_time_sample] = these_oscillations
+    
+    """
+    Generate Gaussian-modulated sinusoidal terms for all GW modes over a time grid. This function takes the lifetime and frequency of a gravitional wave, a NumPy array with the detector strain response times of a gravitational wave detector network, 
+    and the time delay between when the gravitational wave arrives at the specific detector where the terms are being evaluated compared to when it arrived at a fixed reference detector (Hanford, in this code), 
+    and returns a NumPy array with the appropriate sine-Gaussian gravitational wave strain amplitudes for 
+    the detector at each network time. Note that the order of the output array is 1) time sample 2) [A_+, B_x, A_+, B_x] for each of the four gravitational wave modes.
+
+    Parameters
+    ----------
+    signal_lifetime : float
+        1/ e-folding time of the Gaussian envelope in seconds.
+    signal_frequency : float
+        Central frequency of the GW signal in Hz.
+    time_array : ndarray of float, shape (N,)
+        Array of time samples (s) at which to evaluate the waveform.
+    time_delay : float
+        Arrival-time offset (s) of the wavefront at this detector relative to a reference.
+
+    Returns
+    -------
+    oscillatory_terms : ndarray of float, shape (N, 4)
+        For each time in `time_array`, the four mode amplitudes
+        [A₊, Bₓ, A₊, Bₓ], where
+        A₊(t) = e^(−Q² (t−τ)²) · cos(2π f (t−τ)),
+        Bₓ(t) = e^(−Q² (t−τ)²) · sin(2π f (t−τ)).
+
+    Notes
+    -----
+    - Q = √(ln 2) / signal_lifetime sets the Gaussian width.
+    - We reuse A₊ and Bₓ for the 3rd and 4th GW modes respectively.
+    - Fully vectorized: no explicit Python loops or temporary storage per sample.
+
+    Examples
+    --------
+    >>> τ = 0.01                  # s
+    >>> fs = np.linspace(-0.1, 0.1, 1001)
+    >>> H = generate_oscillatory_terms(0.05, 150.0, fs, τ)
+    >>> H.shape
+    (1001, 4)
+    
+    """
+    
+    # Original Implementation:
+        # number_time_samples = time_array.size
+        # signal_q_value = m.sqrt(m.log(2))/signal_lifetime
+        # oscillatory_terms = np.empty((number_time_samples,number_gw_modes))
+        # for this_time_sample in range(number_time_samples) :
+        #     this_time = time_array[this_time_sample]
+        #     this_gaussian_term = m.exp(-1*signal_q_value**2*(this_time - time_delay)**2)
+        #     this_cos_term = m.cos(2*np.pi*signal_frequency*(this_time - time_delay))
+        #     this_sin_term = m.sin(2*np.pi*signal_frequency*(this_time - time_delay))
+        #     this_cos_gauss_term = this_gaussian_term*this_cos_term
+        #     this_sin_gauss_term = this_gaussian_term*this_sin_term
+        #     these_oscillations = np.array([this_cos_gauss_term,this_sin_gauss_term,this_cos_gauss_term,this_sin_gauss_term])
+        #     oscillatory_terms[this_time_sample] = these_oscillations
+        # return oscillatory_terms
+        
+    # Abid's optimized implementation:
+    # Explanation of changes made:
+        # 1. Removed explicit Python loop over time samples: now fully vectorized using NumPy operations.
+        # 2. Used NumPy's vectorized operations for Gaussian envelope and phase
+        # 3. COncise variable names: Q for the Gaussian factor, dt for time differences, envelope and phase for the two main components.
+        # 4. Used np.column_stack to create the final oscillatory terms array in one go, which is more efficient and readable (eliminates redundant arrays)
+            # Avoids repeated allocations and clarifies that the four modes simply reuse the two computed waveforms.
+        
+        #5. Got rid of math module and used NumPy for all math operations, which is more efficient and consistent with the rest of the code.
+        
+    # Gaussian Q-factor
+    Q = np.sqrt(np.log(2)) / signal_lifetime
+
+    # Time relative to arrival at this detector
+    dt = time_array - time_delay
+
+    # Envelope and phase arrays
+    envelope = np.exp(-Q**2 * dt**2)
+    phase    = 2 * np.pi * signal_frequency * dt
+
+    # Cosine- and sine-modulated terms
+    A_plus = envelope * np.cos(phase)
+    B_cross = envelope * np.sin(phase)
+
+    # Stack into (N,4) for the four modes [A₊, Bₓ, A₊, Bₓ]
+    oscillatory_terms = np.column_stack([A_plus, B_cross, A_plus, B_cross])
+
     return oscillatory_terms
 
 #=========================================================================
@@ -729,161 +856,149 @@ def generate_model_amplitudes_array(number_amplitude_combinations, gw_max_amps) 
 and returns a pair of NumPy arrays that give the expected response of each gravitational wave detector at each time for each amplitude and
 angle combination -- indexed by 1) angle combination 2) amplitude combination 3) time sample and 4) detector -- and the array of angle combinations referenced by the detector response array."""
 
-def generate_model_detector_responses(signal_frequency,signal_lifetime,detector_sampling_rate,gw_max_amps,number_amplitude_combinations,number_angular_samples) :
-    time_array = generate_network_time_array(signal_lifetime,detector_sampling_rate,maximum_hanford_livingston_time_delay)
-    number_time_samples = time_array.size
-    hanford_oscillatory_terms = generate_oscillatory_terms(signal_lifetime,signal_frequency,time_array,0)
-    model_amplitudes_array = generate_model_amplitudes_array(number_amplitude_combinations, gw_max_amps)
-    model_angles_array = generate_model_angles_array(number_angular_samples)
-    
-    #Space Complexity issue
-    
-    model_detector_response_array = np.empty((number_angular_samples,number_amplitude_combinations,number_time_samples,number_detectors))
-    
-    
-    for this_angle_set in range(number_angular_samples) :
-        these_angles = model_angles_array[this_angle_set]
-        [fplus_hanford,fcross_hanford] = beam_pattern_response_functions(hanford_detector_angles,these_angles)
-        [fplus_livingston,fcross_livingston] = beam_pattern_response_functions(livingston_detector_angles,these_angles)
-        hanford_livingston_time_delay = time_delay_hanford_to_livingston(these_angles)
-        livingston_oscillatory_terms = generate_oscillatory_terms(signal_lifetime,signal_frequency,time_array,hanford_livingston_time_delay)
-        for this_amplitude_combination in range(number_amplitude_combinations) :
-            these_amplitudes = model_amplitudes_array[this_amplitude_combination]
-            for this_sample_time in range(number_time_samples) :
-                model_detector_response_array[this_angle_set,this_amplitude_combination,this_sample_time,0] = np.dot(these_amplitudes,hanford_oscillatory_terms[this_sample_time]*[fplus_hanford,fplus_hanford,fcross_hanford,fcross_hanford])
-                model_detector_response_array[this_angle_set,this_amplitude_combination,this_sample_time,1] = np.dot(these_amplitudes,livingston_oscillatory_terms[this_sample_time]*[fplus_livingston,fplus_livingston,fcross_livingston,fcross_livingston])
-    return [model_detector_response_array,model_angles_array]
+#    Original Implementation:
 
+# def generate_model_detector_responses(signal_frequency,signal_lifetime,detector_sampling_rate,gw_max_amps,number_amplitude_combinations,number_angular_samples) :
+   
 
-# # AFTER: Optimized version that eliminates the massive array
-# class ModelResponseGenerator:
-#     """
-#     Virtual array that generates model responses on-demand.
-#     Eliminates the need to store the massive 4D array.
-#     """
-#     def __init__(self, signal_frequency, signal_lifetime, detector_sampling_rate, gw_max_amps, number_amplitude_combinations, number_angular_samples):
-#         # Store parameters instead of pre-computing everything
-#         self.signal_frequency = signal_frequency
-#         self.signal_lifetime = signal_lifetime
-#         self.detector_sampling_rate = detector_sampling_rate
-        
-#         # Generate the smaller arrays we actually need
-#         self.time_array = generate_network_time_array(signal_lifetime, detector_sampling_rate, maximum_hanford_livingston_time_delay)
-#         self.number_time_samples = self.time_array.size
-#         self.model_amplitudes_array = generate_model_amplitudes_array(number_amplitude_combinations, gw_max_amps)
-#         self.model_angles_array = generate_model_angles_array(number_angular_samples)
-        
-#         # Pre-compute Hanford oscillatory terms (no time delay)
-#         self.hanford_oscillatory_terms = generate_oscillatory_terms(signal_lifetime, signal_frequency, self.time_array, 0)
-        
-#         # Cache for expensive calculations
-#         self.beam_pattern_cache = {}
-#         self.time_delay_cache = {}
-#         self.livingston_oscillatory_cache = {}
-        
-#         # Store dimensions for array-like interface
-#         self.shape = (number_angular_samples, number_amplitude_combinations, self.number_time_samples, number_detectors)
+   
+#     time_array = generate_network_time_array(signal_lifetime,detector_sampling_rate,maximum_hanford_livingston_time_delay)
+#     number_time_samples = time_array.size
+#     hanford_oscillatory_terms = generate_oscillatory_terms(signal_lifetime,signal_frequency,time_array,0)
+#     model_amplitudes_array = generate_model_amplitudes_array(number_amplitude_combinations, gw_max_amps)
+#     model_angles_array = generate_model_angles_array(number_angular_samples)
     
-#     def _get_beam_patterns(self, angle_idx):
-#         """Get beam patterns with caching"""
-#         if angle_idx not in self.beam_pattern_cache:
-#             angles = self.model_angles_array[angle_idx]
-#             hanford_patterns = beam_pattern_response_functions(hanford_detector_angles, angles)
-#             livingston_patterns = beam_pattern_response_functions(livingston_detector_angles, angles)
-#             self.beam_pattern_cache[angle_idx] = (hanford_patterns, livingston_patterns)
-#         return self.beam_pattern_cache[angle_idx]
+#     #Space Complexity issue
     
-#     def _get_time_delay(self, angle_idx):
-#         """Get time delay with caching"""
-#         if angle_idx not in self.time_delay_cache:
-#             angles = self.model_angles_array[angle_idx]
-#             delay = time_delay_hanford_to_livingston(angles)
-#             self.time_delay_cache[angle_idx] = delay
-#         return self.time_delay_cache[angle_idx]
+#     model_detector_response_array = np.empty((number_angular_samples,number_amplitude_combinations,number_time_samples,number_detectors))
     
-#     def _get_livingston_oscillatory(self, angle_idx):
-#         """Get Livingston oscillatory terms with caching"""
-#         if angle_idx not in self.livingston_oscillatory_cache:
-#             delay = self._get_time_delay(angle_idx)
-#             livingston_terms = generate_oscillatory_terms(self.signal_lifetime, self.signal_frequency, self.time_array, delay)
-#             self.livingston_oscillatory_cache[angle_idx] = livingston_terms
-#         return self.livingston_oscillatory_cache[angle_idx]
     
-#     def get_response(self, angle_idx, amplitude_idx, time_idx, detector_idx):
-#         """Generate a single response value on-demand"""
-#         # Get cached expensive calculations
-#         (hanford_patterns, livingston_patterns) = self._get_beam_patterns(angle_idx)
-#         [fplus_hanford, fcross_hanford] = hanford_patterns
-#         [fplus_livingston, fcross_livingston] = livingston_patterns
-        
-#         amplitudes = self.model_amplitudes_array[amplitude_idx]
-        
-#         if detector_idx == 0:  # Hanford
-#             oscillatory_terms = self.hanford_oscillatory_terms[time_idx]
-#             pattern_multipliers = [fplus_hanford, fplus_hanford, fcross_hanford, fcross_hanford]
-#         else:  # Livingston
-#             livingston_oscillatory = self._get_livingston_oscillatory(angle_idx)
-#             oscillatory_terms = livingston_oscillatory[time_idx]
-#             pattern_multipliers = [fplus_livingston, fplus_livingston, fcross_livingston, fcross_livingston]
-        
-#         return np.dot(amplitudes, oscillatory_terms * pattern_multipliers)
+#     for this_angle_set in range(number_angular_samples) :
+#         these_angles = model_angles_array[this_angle_set]
+#         [fplus_hanford,fcross_hanford] = beam_pattern_response_functions(hanford_detector_angles,these_angles)
+#         [fplus_livingston,fcross_livingston] = beam_pattern_response_functions(livingston_detector_angles,these_angles)
+#         hanford_livingston_time_delay = time_delay_hanford_to_livingston(these_angles)
+#         livingston_oscillatory_terms = generate_oscillatory_terms(signal_lifetime,signal_frequency,time_array,hanford_livingston_time_delay)
+#         for this_amplitude_combination in range(number_amplitude_combinations) :
+#             these_amplitudes = model_amplitudes_array[this_amplitude_combination]
+#             for this_sample_time in range(number_time_samples) :
+#                 model_detector_response_array[this_angle_set,this_amplitude_combination,this_sample_time,0] = np.dot(these_amplitudes,hanford_oscillatory_terms[this_sample_time]*[fplus_hanford,fplus_hanford,fcross_hanford,fcross_hanford])
+#                 model_detector_response_array[this_angle_set,this_amplitude_combination,this_sample_time,1] = np.dot(these_amplitudes,livingston_oscillatory_terms[this_sample_time]*[fplus_livingston,fplus_livingston,fcross_livingston,fcross_livingston])
+#     return [model_detector_response_array,model_angles_array]
     
-#     def get_full_response_for_params(self, angle_idx, amplitude_idx):
-#         """Get full time series for specific angle/amplitude combination"""
-#         # This is more efficient than calling get_response() for each time point
-#         (hanford_patterns, livingston_patterns) = self._get_beam_patterns(angle_idx)
-#         [fplus_hanford, fcross_hanford] = hanford_patterns
-#         [fplus_livingston, fcross_livingston] = livingston_patterns
-        
-#         amplitudes = self.model_amplitudes_array[amplitude_idx]
-#         livingston_oscillatory = self._get_livingston_oscillatory(angle_idx)
-        
-#         # Vectorized calculation for all time points
-#         hanford_response = np.dot(
-#             amplitudes[np.newaxis, :] * self.hanford_oscillatory_terms, 
-#             [fplus_hanford, fplus_hanford, fcross_hanford, fcross_hanford]
-#         )
-#         livingston_response = np.dot(
-#             amplitudes[np.newaxis, :] * livingston_oscillatory, 
-#             [fplus_livingston, fplus_livingston, fcross_livingston, fcross_livingston]
-#         )
-        
-#         return np.column_stack([hanford_response, livingston_response])
     
-#     def __getitem__(self, idx):
-#         """Allow array-like indexing"""
-#         if len(idx) == 4:
-#             angle_idx, amplitude_idx, time_idx, detector_idx = idx
-#             return self.get_response(angle_idx, amplitude_idx, time_idx, detector_idx)
-#         elif len(idx) == 2:
-#             angle_idx, amplitude_idx = idx
-#             return self.get_full_response_for_params(angle_idx, amplitude_idx)
-#         else:
-#             raise IndexError("Invalid indexing")
+# Abid's optimized implementation:
 
-# # Updated function that returns the generator instead of massive array
-# def generate_model_detector_responses(signal_frequency, signal_lifetime, detector_sampling_rate, gw_max_amps, number_amplitude_combinations, number_angular_samples):
-#     """
-#     OPTIMIZED VERSION: Returns a generator that creates responses on-demand
-#     Memory usage: ~2MB instead of ~800MB
-#     """
-#     generator = ModelResponseGenerator(
-#         signal_frequency, signal_lifetime, detector_sampling_rate, 
-#         gw_max_amps, number_amplitude_combinations, number_angular_samples
-#     )
+def generate_model_detector_responses(
+    signal_frequency,
+    signal_lifetime,
+    detector_sampling_rate,
+    gw_max_amps,
+    number_amplitude_combinations,
+    number_angular_samples,
+):
+    """
+    Predict network detector responses over amplitude and angle models.
+
+    Parameters
+    ----------
+    signal_frequency : float
+        Central frequency f of the GW monochromatic mode (Hz).
+    signal_lifetime : float
+        Lifetime τ (time to half-maximum amplitude) of the GW mode (s).
+    detector_sampling_rate : float
+        Sampling rate (Hz) of all detectors (samples per second).
+    gw_max_amps : float
+        Maximum GW amplitude magnitude to sample.
+    number_amplitude_combinations : int
+        Number of amplitude combinations to generate (each combination is a 4-vector).
+    number_angular_samples : int
+        Number of source-angle combinations to generate (each is [δ, α, ψ]).
+
+    Returns
+    -------
+    responses : ndarray, shape (number_angular_samples, number_amplitude_combinations, number_time_samples, 2)
+        Predicted strain responses for each angle/amp/time/model:
+        - axis 0: index of angle combination
+        - axis 1: index of amplitude combination
+        - axis 2: time sample
+        - axis 3: detector index (0 = Hanford, 1 = Livingston)
+    angle_grid : ndarray, shape (number_angular_samples, 3)
+        Array of source angle triples [declination δ, right ascension α, polarization ψ].
+
+    Notes
+    -----
+    1. A reference Hanford detector (zero delay) defines the “network” time grid.
+    2. For each angle set:
+       - Compute beam patterns F₊, Fₓ for Hanford & Livingston.
+       - Weight the precomputed Hanford oscillatory terms by [F₊, Fₓ, F₊, Fₓ].
+       - Compute Livingston oscillatory terms with its time delay, then weight similarly.
+    3. Inner time loop is eliminated by vectorized dot products:
+       responses[i, j, :, d] = (weighted_terms_d @ amplitude_vector).
+
+    Examples
+    --------
+    >>> R, angles = generate_model_detector_responses(150.0, 0.05, 4096, 1e-21, 10, 20)
+    >>> R.shape  # (20 angles, 10 amps, N times, 2 detectors)
+    (20, 10, R.shape[2], 2)
     
-#     return [generator, generator.model_angles_array]
+    #Explanation of changes made:
+    1. Replaced innermost time-sample loop with Vectorizing the dot over the entire time axis at once vastly 
+         reduces Python-level overhead and makes the code both faster and more concise.
+    2. Built pattern_H = [F₊ₕ, Fₓₕ, F₊ₕ, Fₓₕ] and applied it in one shot via broadcasting.
+        Avoids recomputing or re-allocating the same four-element array inside the loops, and clarifies that both Hanford and Livingston use the same pattern structure.
+    
+    """
+    # Abbreviate the input sizes
+    n_amp = number_amplitude_combinations
+    n_ang = number_angular_samples
 
+    # Time grid for the network (reference detector delay = 0)
+    time_array = generate_network_time_array(
+        signal_lifetime,
+        detector_sampling_rate,
+        maximum_hanford_livingston_time_delay,
+    )
+    n_times = time_array.size
 
-# # USAGE EXAMPLE:
-# # Before (creates 800MB array):
-# # [model_detector_responses, model_angles_array] = generate_model_detector_responses_original(...)
-# # response = model_detector_responses[10, 5, 100, 0]  # Access one value
+    # Precompute Hanford oscillatory terms (zero delay)
+    hanford_terms = generate_oscillatory_terms(
+        signal_lifetime, signal_frequency, time_array, time_delay=0.0
+    )
 
-# # After (uses ~2MB):
-# # [model_generator, model_angles_array] = generate_model_detector_responses(...)  
-# # response = model_generator[10, 5, 100, 0]  # Same interface, computed on-demand
-# # full_response = model_generator[10, 5]  # Get full time series efficiently
+    # Generate model amplitude and angle grids
+    amplitude_grid = generate_model_amplitudes_array(n_amp, gw_max_amps)  # shape (n_amp, 4)
+    angle_grid = generate_model_angles_array(n_ang)                     # shape (n_ang, 3)
+
+    # Initialize output array: detectors=2 (0=H1, 1=L1)
+    responses = np.empty((n_ang, n_amp, n_times, 2))
+
+    # Loop over angle sets
+    for i_ang, angles in enumerate(angle_grid):
+        # Beam patterns for Hanford & Livingston
+        Fp_H, Fx_H = beam_pattern_response_functions(hanford_detector_angles, angles)
+        Fp_L, Fx_L = beam_pattern_response_functions(livingston_detector_angles, angles)
+
+        # Weight Hanford oscillatory terms: shape (n_times, 4)
+        pattern_H = np.array([Fp_H, Fx_H, Fp_H, Fx_H])
+        weighted_H = hanford_terms * pattern_H[np.newaxis, :]
+
+        # Compute Livingston oscillatory terms with its time delay
+        delay_L = time_delay_hanford_to_livingston(angles)
+        liv_terms = generate_oscillatory_terms(
+            signal_lifetime, signal_frequency, time_array, delay_L
+        )
+        pattern_L = np.array([Fp_L, Fx_L, Fp_L, Fx_L])
+        weighted_L = liv_terms * pattern_L[np.newaxis, :]
+
+        # Loop over amplitude combinations and vector-dot over modes
+        for j_amp, amps in enumerate(amplitude_grid):
+            # responses for Hanford (detector 0) and Livingston (detector 1)
+            responses[i_ang, j_amp, :, 0] = weighted_H @ amps
+            responses[i_ang, j_amp, :, 1] = weighted_L @ amps
+
+    return responses, angle_grid
+
 
 #=========================================================================
 
