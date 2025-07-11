@@ -360,50 +360,304 @@ def change_basis_detector_to_ec(detector_angles) :
 
 #=========================================================================
 
-"""
-    This function takes three lists -- the first containing the latitude, longitude, and orientation angles of a gravitational wave detector, 
+def detector_response(detector_angles, source_angles, tt_amplitudes) :
+    
+    """
+    Compute the scalar strain measured by a gravitational-wave detector. This function takes three lists -- the first containing the latitude, longitude, and orientation angles of a gravitational wave detector, 
     the second containing the declination, right ascension, and polarization angles of the source, and the third containing the "plus" and "cross" 
     strain amplitudes of the gravitational wave in the transverse, traceless ("TT") gauge -- and returns a scalar representing the strain measured by the gravitational wave detector. 
     Note that the detector response tensor is a (2-0) tensor.
-"""
 
-def detector_response(detector_angles, source_angles, tt_amplitudes) :
-    detector_response_tensor_detector_frame = np.array([[1/2,0,0],[0,-1/2,0],[0,0,0]])
-    transform_detector_to_ec = change_basis_detector_to_ec(detector_angles)
-    detector_response_tensor_earth_centered = transform_2_0_tensor(detector_response_tensor_detector_frame,transform_detector_to_ec)
-    gw_earth_centered = gravitational_wave_ec_frame(source_angles,tt_amplitudes)
-    detector_response = np.tensordot(gw_earth_centered,detector_response_tensor_earth_centered)
-    return detector_response
+    Parameters
+    ----------
+    detector_angles : array-like of float, shape (3,)
+        Detector orientation in Earth-centered coordinates (radians):
+        - latitude θ
+        - longitude ϕ
+        - orientation γ (rotation about local vertical)
+    source_angles : array-like of float, shape (3,)
+        Source orientation in Earth-centered coordinates (radians):
+        - declination δ
+        - right ascension α
+        - polarization ψ
+    tt_amplitudes : array-like of float, shape (2,)
+        Transverse-traceless strain amplitudes in GW frame:
+        - h₊ (plus)
+        - hₓ (cross)
+
+    Returns
+    -------
+    response : float
+        Scalar detector response: the double contraction of the Earth-frame
+        GW strain tensor with the detector’s response tensor.
+
+    Notes
+    -----
+    1. In the detector frame, the response tensor is 
+       ```
+       D_det = ½ diag(1, –1, 0)
+       ```
+       a (2-0) tensor.
+    2. Transform D_det to Earth-centered frame via 
+       `D_ec = transform_2_0_tensor(D_det, R_det_ec)`, where 
+       `R_det_ec = change_basis_detector_to_ec(detector_angles)`.
+    3. Compute the GW strain in Earth frame:
+       `h_ec = gravitational_wave_ec_frame(source_angles, tt_amplitudes)`.
+    4. The measured strain is 
+       ```
+       response = h_ec : D_ec = Σ_{i,j} h_ec[i,j] · D_ec[i,j].
+       ```
+
+    Examples
+    --------
+    >>> det_angles = [0.6, 1.2, 0.3]
+    >>> src_angles = [0.1, 2.3, 0.4]
+    >>> amps = [1e-22, 2e-22]
+    >>> r = detector_response(det_angles, src_angles, amps)
+    >>> isinstance(r, float)
+    True
+    """
+    
+    #Original Implementation:
+        # detector_response_tensor_detector_frame = np.array([[1/2,0,0],[0,-1/2,0],[0,0,0]])
+        # transform_detector_to_ec = change_basis_detector_to_ec(detector_angles)
+        # detector_response_tensor_earth_centered = transform_2_0_tensor(detector_response_tensor_detector_frame,transform_detector_to_ec)
+        # gw_earth_centered = gravitational_wave_ec_frame(source_angles,tt_amplitudes)
+        # detector_response = np.tensordot(gw_earth_centered,detector_response_tensor_earth_centered)
+        # return detector_response
+        
+    
+    #Abid's optimized implementation:
+    
+    # Explanation of changes made:
+        # 1. Changed variable names for clarity:
+            #BEFORE: 
+                # detector_response_tensor_detector_frame
+                # transform_detector_to_ec
+                # detector_response_tensor_earth_centered
+                # gw_earth_centered
+            
+            #AFTER:
+                # D_det       # detector‐frame response tensor
+                # R_det_ec    # change‐of‐basis matrix
+                # D_ec        # Earth‐centered response tensor
+                # h_ec        # Earth‐centered GW strain tensor
+        #2. Explicit double contraction: By specifying axes=([0,1],[0,1]), it’s crystal-clear that we’re summing over both tensor indices (a double contraction), 
+            #   rather than relying on the default behavior.
+        
+        #3. Removed unnecessary intermediate variables: just return detector response tensorProduct directly instead of assigning it to another variable
+
+    
+    # Detector-frame response tensor (2-0)
+    D_det = np.array([
+        [0.5,  0.0, 0.0],
+        [0.0, -0.5, 0.0],
+        [0.0,  0.0, 0.0]
+    ])
+
+    # Covariant change-of-basis matrix for detector → Earth-centered
+    R_det_ec = change_basis_detector_to_ec(detector_angles)
+
+    # Transform detector response tensor into Earth-centered frame
+    D_ec = transform_2_0_tensor(D_det, R_det_ec)
+
+    # Get GW strain tensor in Earth-centered frame
+    h_ec = gravitational_wave_ec_frame(source_angles, tt_amplitudes)
+
+    # Double contraction over both tensor indices → scalar
+    return np.tensordot(h_ec, D_ec, axes=([0, 1], [0, 1]))
 
 
 #=========================================================================
 
-"""This function takes two lists -- the first containing the latitude, longitude, and orientation angles of a gravitational wave detector, and the second containing the declination, 
-right ascensions, and polarization angles of a gravitational wave source -- and returns a list with the beam pattern response functions F_+ and F_x of the detector for that source."""
+
 
 def beam_pattern_response_functions(detector_angles,source_angles) :
-    detector_response_tensor_detector_frame = np.array([[1/2,0,0],[0,-1/2,0],[0,0,0]])
-    transform_detector_ec = change_basis_detector_to_ec(detector_angles)
-    detector_response_tensor_earth_centered = transform_2_0_tensor(detector_response_tensor_detector_frame,transform_detector_ec)
-    transform_gw_ec = change_basis_gw_to_ec(source_angles)
-    transform_ec_gw = np.linalg.inv(transform_gw_ec)
-    detector_response_tensor_gw_frame = transform_2_0_tensor(detector_response_tensor_earth_centered,transform_ec_gw)
-    fplus = detector_response_tensor_gw_frame[0,0]-detector_response_tensor_gw_frame[1,1]
-    fcross = detector_response_tensor_gw_frame[0,1]+detector_response_tensor_gw_frame[1,0]
-    return [fplus, fcross]
+    """
+    Compute the beam-pattern (antenna-pattern) response functions F₊ and Fₓ for a gravitational-wave detector. This function takes two lists -- the first containing the latitude, 
+    longitude, and orientation angles of a gravitational wave detector, and the second containing the declination, right ascensions, 
+    and polarization angles of a gravitational wave source -- and returns a list with the beam pattern response functions F_+ and F_x of the detector for that source.
+
+    Parameters
+    ----------
+    detector_angles : array-like of float, shape (3,)
+        Detector orientation in Earth-centered coordinates (radians):
+        - latitude θ  
+        - longitude ϕ  
+        - orientation γ (rotation about the local vertical axis)
+    source_angles : array-like of float, shape (3,)
+        Source orientation in Earth-centered coordinates (radians):
+        - declination δ  
+        - right ascension α  
+        - polarization ψ
+
+    Returns
+    -------
+    F_plus, F_cross : float
+        Beam-pattern response functions:
+        - F₊ (“plus” polarization response)
+        - Fₓ (“cross” polarization response)
+
+    Notes
+    -----
+    1. In the detector frame, the response tensor is
+       ```
+       D_det = ½ · diag(1, –1, 0)
+       ```
+       a (2-0) tensor.
+    2. Transform D_det to Earth-centered frame:
+       ```
+       R_det_ec = change_basis_detector_to_ec(detector_angles)
+       D_ec     = transform_2_0_tensor(D_det, R_det_ec)
+       ```
+    3. Transform D_ec into the GW frame:
+       ```
+       R_gw_ec = change_basis_gw_to_ec(source_angles)
+       R_ec_gw = inv(R_gw_ec)
+       D_gw    = transform_2_0_tensor(D_ec, R_ec_gw)
+       ```
+    4. The antenna patterns are then extracted as
+       ```
+       F₊ = D_gw[0,0] – D_gw[1,1]
+       Fₓ = D_gw[0,1] + D_gw[1,0]
+       ```
+
+    Examples
+    --------
+    >>> det = [0.6, 1.2, 0.3]
+    >>> src = [0.1, 2.3, 0.4]
+    >>> Fp, Fc = beam_pattern_response_functions(det, src)
+    >>> isinstance(Fp, float)
+    True
+    """
+    
+    #Original Implementation:
+        # detector_response_tensor_detector_frame = np.array([[1/2,0,0],[0,-1/2,0],[0,0,0]])
+        # transform_detector_ec = change_basis_detector_to_ec(detector_angles)
+        # detector_response_tensor_earth_centered = transform_2_0_tensor(detector_response_tensor_detector_frame,transform_detector_ec)
+        # transform_gw_ec = change_basis_gw_to_ec(source_angles)
+        # transform_ec_gw = np.linalg.inv(transform_gw_ec)
+        # detector_response_tensor_gw_frame = transform_2_0_tensor(detector_response_tensor_earth_centered,transform_ec_gw)
+        # fplus = detector_response_tensor_gw_frame[0,0]-detector_response_tensor_gw_frame[1,1]
+        # fcross = detector_response_tensor_gw_frame[0,1]+detector_response_tensor_gw_frame[1,0]
+        # return [fplus, fcross] # I dont like this list return
+        
+    #Abid's optimized implementation:
+    
+    # Explanation of changes made:
+    # 1. Changed variable names for clarity:
+        # Reference:
+        
+            # D_det    # detector-frame response tensor  
+            # R_det_ec # change-of-basis matrix detector→EC  
+            # D_ec     # EC-frame response tensor  
+            # R_gw_ec  # GW→EC change-of-basis  
+            # R_ec_gw  # EC→GW inverse  
+            # D_gw     # GW-frame response tensor  
+    #2. Returns Tuple instead of List
+        # This is more idiomatic in Python for fixed-size collections,
+        # and it makes it clear that the two values are related (F₊ and Fₓ).
+        # It also allows unpacking directly into F_plus, F_cross.
+        
+    #3. regular numpy vectorizing routine
+    
+    # Detector‐frame response tensor (2-0)
+    D_det = np.array([
+        [0.5,  0.0, 0.0],
+        [0.0, -0.5, 0.0],
+        [0.0,  0.0, 0.0]
+    ])
+
+    # Change-of-basis: detector frame → Earth-centered
+    R_det_ec = change_basis_detector_to_ec(detector_angles)
+    D_ec    = transform_2_0_tensor(D_det, R_det_ec)
+
+    # Change-of-basis: Earth-centered → GW frame
+    R_gw_ec = change_basis_gw_to_ec(source_angles)
+    R_ec_gw = np.linalg.inv(R_gw_ec)
+    D_gw    = transform_2_0_tensor(D_ec, R_ec_gw)
+
+    # Extract plus and cross responses
+    F_plus  = D_gw[0, 0] - D_gw[1, 1]
+    F_cross = D_gw[0, 1] + D_gw[1, 0]
+
+    return F_plus, F_cross
+    
 
 #=========================================================================
 
-"""This function take a list of the declination, right ascension, and polarization angles of a gravitational wave source and returns the time delay between when the signal will arrive at the Hanford detector 
-and when it will arrive at the Livingston detector. Negative values indicate that the signal arrives at the Livingston detector first."""
-
 def time_delay_hanford_to_livingston(source_angles) :
-    hanford_z_vector_earth_centered = source_vector_from_angles(hanford_detector_angles)
-    livingston_z_vector_earth_centered = source_vector_from_angles(livingston_detector_angles)
-    position_vector_hanford_to_livingston = earth_radius * (livingston_z_vector_earth_centered - hanford_z_vector_earth_centered)
-    gw_source_vector = source_vector_from_angles(source_angles)
-    gw_z_vector_earth_centered = -1*gw_source_vector
-    return 1/speed_light*(np.dot(gw_z_vector_earth_centered,position_vector_hanford_to_livingston))
+    
+    """
+    Compute the gravitational-wave arrival time delay between the Hanford and Livingston detectors. This function take a list of the declination, right ascension, 
+    and polarization angles of a gravitational wave source and returns the time delay between when the signal will arrive at the Hanford detector and 
+    when it will arrive at the Livingston detector. Negative values indicate that the signal arrives at the Livingston detector first.
+
+    Parameters
+    ----------
+    source_angles : array-like of float, shape (3,)
+        GW source orientation angles in Earth-centered coordinates (radians):
+        - declination δ
+        - right ascension α
+        - polarization ψ
+
+    Returns
+    -------
+    delay : float
+        Time difference Δt = t_Hanford – t_Livingston in seconds.
+        Negative values indicate the wavefront reaches Livingston before Hanford.
+
+    Notes
+    -----
+    1. Detector positions (in meters) in the Earth-centered frame are
+       r_H = Rₑ · u_H,  r_L = Rₑ · u_L,
+       where u_H/L = source_vector_from_angles(hanford_detector_angles/livingston_detector_angles)
+       and Rₑ = earth_radius.
+    2. The baseline vector from Hanford to Livingston is 
+       b = r_L – r_H.
+    3. The GW propagation direction (unit vector) is 
+       p = –source_vector_from_angles(source_angles).
+    4. The time delay is Δt = (p · b) / c, with c = speed_light.
+
+    Examples
+    --------
+    >>> angles = [0.1, 1.2, 0.0]            # δ, α, ψ in radians
+    >>> dt = time_delay_hanford_to_livingston(angles)
+    >>> isinstance(dt, float)
+    True
+    """
+    # Original Implementation:
+        # hanford_z_vector_earth_centered = source_vector_from_angles(hanford_detector_angles)
+        # livingston_z_vector_earth_centered = source_vector_from_angles(livingston_detector_angles)
+        # position_vector_hanford_to_livingston = earth_radius * (livingston_z_vector_earth_centered - hanford_z_vector_earth_centered)
+        # gw_source_vector = source_vector_from_angles(source_angles)
+        # gw_z_vector_earth_centered = -1*gw_source_vector
+        # return 1/speed_light*(np.dot(gw_z_vector_earth_centered,position_vector_hanford_to_livingston))
+    
+    # Abid's optimized implementation
+    
+    # Explanation of changes made:
+        # 1. Changed variable names for clarity:
+            # Reference:
+                # r_H  # Earth-centered position vector of Hanford
+                # r_L  # Earth-centered position vector of Livingston
+                # baseline  # Vector from Hanford to Livingston
+                # propagation_dir  # Unit vector in GW propagation direction
+                
+        # 2. Explicit division by speed of light 
+    
+    # Earth-centered position vectors (m) of each site
+    r_H = earth_radius * source_vector_from_angles(hanford_detector_angles)
+    r_L = earth_radius * source_vector_from_angles(livingston_detector_angles)
+
+    # Baseline from Hanford to Livingston
+    baseline = r_L - r_H
+
+    # GW propagation direction (unit vector) in Earth frame
+    propagation_dir = -source_vector_from_angles(source_angles)
+
+    # Return time delay (s)
+    return np.dot(propagation_dir, baseline) / speed_light
 
 #=========================================================================
 
@@ -728,7 +982,8 @@ def get_best_fit_angles_deltas(real_detector_responses,real_angles_array,model_d
 
     return [sum_real_minimum_angle_deltas,sum_real_minimum_response_angle_deltas,sum_real_maximum_weighted_response_angle_deltas,single_best_fit_time,weighted_best_fit_time]
 
-#=========================================================================
+#========================================================================= START OF DRIVER FUNCTIONS =========================================================================
+
 
 full_process_start_time = time.process_time()
 gw_frequency = 100
