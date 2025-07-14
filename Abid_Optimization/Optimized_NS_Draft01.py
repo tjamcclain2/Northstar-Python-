@@ -943,7 +943,7 @@ def generate_model_detector_responses(
     (20, 10, R.shape[2], 2)
     
     #Explanation of changes made:
-    1. Replaced innermost time-sample loop with Vectorizing the dot over the entire time axis at once vastly 
+    1. Replaced innermost time-sample loop with Vectorizing the dot over the entire time axis at once as it vastly 
          reduces Python-level overhead and makes the code both faster and more concise.
     2. Built pattern_H = [F₊ₕ, Fₓₕ, F₊ₕ, Fₓₕ] and applied it in one shot via broadcasting.
         Avoids recomputing or re-allocating the same four-element array inside the loops, and clarifies that both Hanford and Livingston use the same pattern structure.
@@ -1108,8 +1108,8 @@ gw_max_amps = 1
 max_noise_amp = 0.1
 
 # Number of samples for angles and amplitudes
-number_angular_samples = 105
-number_amplitude_combinations = 10**5
+number_angular_samples = 100
+number_amplitude_combinations = 100
 #########################################
 
 

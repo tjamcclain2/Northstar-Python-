@@ -3,6 +3,7 @@ import numpy as np
 import time
 def main():
     
+
     number_detectors = 2
     number_gw_polarizations = 2
     number_gw_modes = 4
@@ -117,9 +118,9 @@ def main():
         for this_angle_set in range(number_angular_samples) :
             for this_source_angle in range(number_source_angles) :
                 if this_source_angle == 0 :
-                    model_angles_array[this_angle_set,this_source_angle] = (np.random.rand(1).item() - 1/2)*np.pi
+                    model_angles_array[this_angle_set,this_source_angle] = (np.random.rand(1) - 1/2)*np.pi
                 else :
-                    model_angles_array[this_angle_set,this_source_angle] = np.random.rand(1).item() *2*np.pi
+                    model_angles_array[this_angle_set,this_source_angle] = np.random.rand(1)*2*np.pi
         return model_angles_array
 
     def generate_model_amplitudes_array(number_amplitude_combinations, gw_max_amps) :
@@ -148,20 +149,7 @@ def main():
                     model_detector_response_array[this_angle_set,this_amplitude_combination,this_sample_time,0] = np.dot(these_amplitudes,hanford_oscillatory_terms[this_sample_time]*[fplus_hanford,fplus_hanford,fcross_hanford,fcross_hanford])
                     model_detector_response_array[this_angle_set,this_amplitude_combination,this_sample_time,1] = np.dot(these_amplitudes,livingston_oscillatory_terms[this_sample_time]*[fplus_livingston,fplus_livingston,fcross_livingston,fcross_livingston])
         return [model_detector_response_array,model_angles_array]
-    
-    #are you creating extra things unnecessarily?
-    #creating lists in python takes time => so dont try to create many lists 
-    #think about list re-use 
-    #think about how to reduce repeated calls 
-    #Re-using fucntions for the same calculation 
-    #are the loops really necessary?
 
-
-
-#think of a clever way of using vector products instead of loops 
-#numpy is always faster so think of ways to convert your loops to numpy vector products => this WILL BE TEH FASTEST
-#not creating extra lists 
-#numpy is written in C so it is much faster than python loops
     def generate_noise_array(max_noise_amp,number_time_samples) :
         noise_array = np.random.rand(number_time_samples)*max_noise_amp
         return noise_array
@@ -231,25 +219,14 @@ def main():
     detector_sampling_rate = ligo_detector_sampling_rate
     gw_max_amps = 1
     max_noise_amp = 0.1
-    
-    #What the heck? 
-    # This is trying to allocate 191TiB of memory, which is not possible.
-    # number_angular_samples = 10**5
-    
     number_angular_samples = 100
-    
-    
-    #What the heck-2? 
-    # number_amplitude_combinations = 10**5
     number_amplitude_combinations = 100
-    
-    
     [model_detector_responses,model_angles_array] = generate_model_detector_responses(gw_frequency,gw_lifetime,detector_sampling_rate,gw_max_amps,number_amplitude_combinations,number_angular_samples)
     [real_detector_responses,real_angles_array] = generate_real_detector_responses(gw_frequency,gw_lifetime,detector_sampling_rate,gw_max_amps,number_amplitude_combinations,number_angular_samples,max_noise_amp)
     best_fit_data = get_best_fit_angles_deltas(real_detector_responses,real_angles_array,model_detector_responses,model_angles_array)
     full_process_end_time = time.process_time()
     full_process_time = full_process_end_time - full_process_start_time
-    end_time_string = time.strftime("%d_%b_%Y_%H%M%S", time.localtime())
+    end_time_string = time.strftime("%d_%b_%Y_%H%M%S",)
     file_name = "northstar-ouput-" + end_time_string + ".txt"
 
     with open(file_name,"w") as file:
