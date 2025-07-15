@@ -12,7 +12,7 @@ Performance testing: The Northstar algorithm has not be tested extensively since
 - Step-2: Optimize the algorithm at code level --> Goal: Make sure you have algorithmic efficiency [done; Week-3 of July]
 - Step-3: Optimize at server-level --> Is my algorithm giving the best performance across all GPU instances?
 
-## Week-3:
+### Week-3 (Pivot Point):
 
 ### Performance Optimization Summary
 
@@ -25,4 +25,5 @@ The original implementation of the Northstar pipeline suffered from significant 
 
 Please check out the comparative analysis for 100 samples provided in the Profile_Code directory!
 
-On Week-4, I've decided to pivot to learn the fundamentals of training a neural network for our research.
+## On Week-4, 
+### I've decided to pivot to learn the fundamentals of training a neural network for our research.
