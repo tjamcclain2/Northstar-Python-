@@ -826,18 +826,76 @@ def generate_oscillatory_terms(signal_lifetime, signal_frequency, time_array, ti
     return oscillatory_terms
 
 #=========================================================================
-"""This functions takes the number of desired model angle sets [S, phi, psi] and returns a NumPy array with that many randomized angle sets. Note that the first angle in each set is bewteen 
--π/2 and π/2, while the other two angles are between 0 and 2π. The first angle is the declination, the second is the right ascension, and the third is the polarization angle of a gravitational wave source.
+"""
 """
 def generate_model_angles_array(number_angular_samples) :
-    model_angles_array = np.empty((number_angular_samples,number_source_angles))
-    for this_angle_set in range(number_angular_samples) :
-        for this_source_angle in range(number_source_angles) :
-            if this_source_angle == 0 :
-                model_angles_array[this_angle_set,this_source_angle] = (np.random.rand(1) - 1/2)*np.pi
-            else :
-                model_angles_array[this_angle_set,this_source_angle] = np.random.rand(1)*2*np.pi
-    return model_angles_array
+    
+    """
+    Generate randomized source-angle sets [declination, right ascension, polarization]. This functions takes the number of desired model angle sets [S, phi, psi] 
+    and returns a NumPy array with that many randomized angle sets. Note that the first angle in each set is bewteen -π/2 and π/2, 
+    while the other two angles are between 0 and 2π. The first angle is the declination, the second is the right ascension, 
+    and the third is the polarization angle of a gravitational wave source.
+
+    Parameters
+    ----------
+    number_angular_samples : int
+        Number of angle triples to generate.
+
+    Returns
+    -------
+    angle_grid : ndarray of float, shape (number_angular_samples, 3)
+        Array of angle sets:
+        - Column 0: declination δ ∈ [–π/2, π/2]
+        - Column 1: right ascension α ∈ [0, 2π)
+        - Column 2: polarization ψ ∈ [0, 2π)
+
+    Notes
+    -----
+    - Uses uniform random sampling in each specified range.
+    - Vectorized implementation avoids Python loops.
+
+    Examples
+    --------
+    >>> angles = generate_model_angles_array(10)
+    >>> angles.shape
+    (10, 3)
+    >>> import numpy as np
+    >>> np.all((angles[:,0] >= -np.pi/2) & (angles[:,0] <= np.pi/2))
+    True
+    """
+    
+    
+    # model_angles_array = np.empty((number_angular_samples,number_source_angles))
+    
+    #  #Original: Two nested for-loops assigning one angle at a time into an np.empty array.
+    
+    # for this_angle_set in range(number_angular_samples) :
+    #     for this_source_angle in range(number_source_angles) :
+    #         if this_source_angle == 0 :
+    #             model_angles_array[this_angle_set,this_source_angle] = (np.random.rand(1) - 1/2)*np.pi
+    #         else :
+    #             model_angles_array[this_angle_set,this_source_angle] = np.random.rand(1)*2*np.pi
+    # return model_angles_array
+    
+    
+    #Abid's optimized implementation:
+    
+    # Explanation of changes made:
+        # 1. Used NumPy's vectorized operations to generate all angles at once,
+        # which is more efficient than looping through each angle set.
+        
+        #New: One call to np.random.rand(number_angular_samples) for declinations and one call to np.random.rand(number_angular_samples, 2) for right-ascension & polarization.
+        # Why: Eliminates Python-level loops, leveraging NumPy’s optimized C routines for both speed and simplicity.
+        
+        # 2. Assembling with np.column_stack to create the final angle grid in one go, which is more efficient and readable (avoid preallocating an empty buffer).
+    
+    # Declinations: uniform in [–π/2, π/2]
+    dec = (np.random.rand(number_angular_samples) - 0.5) * np.pi
+    # Right ascension & polarization: uniform in [0, 2π)
+    ra_psi = np.random.rand(number_angular_samples, 2) * 2 * np.pi
+    # Stack into shape (N, 3)
+    angle_grid = np.column_stack((dec, ra_psi))
+    return angle_grid
 
 #=========================================================================
 
