@@ -1,21 +1,82 @@
 #Let's fix this code like a computer scientist!
 
-import math as m
-import numpy as np
+
+"""
+Northstar Algorithm — Original Implementation and Optimization
+
+Author: Dr. Tom McClain  
+Optimized by: Abid Jeem
+
+This script contains the original implementation of the Northstar algorithm for 
+gravitational wave source localization, alongside detailed documentation of the 
+performance optimizations applied.
+
+The file is extensively commented to highlight:
+- The structure and logic of the original code,
+- The specific changes made to improve performance,
+- The rationale behind each optimization decision.
+
+This serves both as a functional source code and as an educational resource for 
+understanding how algorithmic and computational optimizations can be applied 
+to scientific Python code.
+"""
+
+# Original implementation:
+
+# import math as m
+# import numpy as np
 import time
-# NOTE: all angles are in radians and all dimension-ful quantities are in SI units 
-# (meters, seconds, kilograms, and combinations thereof) unless explicitly indicated otherwise.
-number_detectors = 2
-number_gw_polarizations = 2
-number_gw_modes = 4
-number_source_angles = 3
-hanford_detector_angles = [(46+27/60+18.528/3600)*np.pi/180, (240+35/60+32.4343/3600)*np.pi/180,np.pi/2+125.9994*np.pi/180]
-livingston_detector_angles = [(30+33/60+46.4196/3600)*np.pi/180, (269+13/60+32.7346/3600)*np.pi/180,np.pi/2+197.7165*np.pi/180]
-ligo_detector_sampling_rate = 16384
-earth_radius = 6371000
-speed_light = 299792458
-maximum_hanford_livingston_time_delay = 0.010002567302556083
-weighting_power = 2
+# # NOTE: all angles are in radians and all dimension-ful quantities are in SI units 
+# # (meters, seconds, kilograms, and combinations thereof) unless explicitly indicated otherwise.
+# number_detectors = 2
+# number_gw_polarizations = 2
+# number_gw_modes = 4
+# number_source_angles = 3
+# hanford_detector_angles = [(46+27/60+18.528/3600)*np.pi/180, (240+35/60+32.4343/3600)*np.pi/180,np.pi/2+125.9994*np.pi/180]
+# livingston_detector_angles = [(30+33/60+46.4196/3600)*np.pi/180, (269+13/60+32.7346/3600)*np.pi/180,np.pi/2+197.7165*np.pi/180]
+# ligo_detector_sampling_rate = 16384
+# earth_radius = 6371000
+# speed_light = 299792458
+# maximum_hanford_livingston_time_delay = 0.010002567302556083
+# weighting_power = 2
+
+#Abid's optimized implementation:
+#Explanation of changes made:
+# 1. Changed all math functions to use NumPy (vectorized operations) for consistency and performance
+# 2. dms_to_rad() helper : Avoids repetitive code and improves readability
+# 3 Uppercase constants for python convention
+
+#4. Wrapped angles in np.array	Enables potential vectorized operations later
+#5. Underscores in large numbers for easier visual parsing for Abid's genZ AdhD brain
+import numpy as np
+
+# Constants (SI units unless noted otherwise)
+NUMBER_DETECTORS = 2
+NUMBER_GW_POLARIZATIONS = 2
+NUMBER_GW_MODES = 4
+NUMBER_SOURCE_ANGLES = 3
+LIGO_DETECTOR_SAMPLING_RATE = 16_384  # Hz
+EARTH_RADIUS = 6_371_000  # meters
+SPEED_OF_LIGHT = 299_792_458  # m/s
+MAX_HANFORD_LIVINGSTON_DELAY = 0.010002567302556083  # seconds
+WEIGHTING_POWER = 2
+
+# Helper to convert (deg, min, sec) to radians
+def dms_to_rad(deg, minutes, seconds):
+    return np.deg2rad(deg + minutes / 60 + seconds / 3600)
+
+# Detector angles: [latitude, longitude, orientation]
+hanford_detector_angles = np.array([
+    dms_to_rad(46, 27, 18.528),
+    dms_to_rad(240, 35, 32.4343),
+    np.deg2rad(125.9994) + np.pi / 2
+])
+
+livingston_detector_angles = np.array([
+    dms_to_rad(30, 33, 46.4196),
+    dms_to_rad(269, 13, 32.7346),
+    np.deg2rad(197.7165) + np.pi / 2
+])
 
 #=========================================================================
 
@@ -89,7 +150,7 @@ def source_vector_from_angles(angles) :
         1.0
     """
     [first, second, third] = angles
-    initial_source_vector = np.array([m.cos(first)*m.cos(second),m.cos(first)*m.sin(second),m.sin(first)])
+    initial_source_vector = np.array([np.cos(first)*np.cos(second), np.cos(first)*np.sin(second), np.sin(first)])
     return initial_source_vector
 
 #=========================================================================
@@ -647,8 +708,8 @@ def time_delay_hanford_to_livingston(source_angles) :
         # 2. Explicit division by speed of light 
     
     # Earth-centered position vectors (m) of each site
-    r_H = earth_radius * source_vector_from_angles(hanford_detector_angles)
-    r_L = earth_radius * source_vector_from_angles(livingston_detector_angles)
+    r_H = EARTH_RADIUS * source_vector_from_angles(hanford_detector_angles)
+    r_L = EARTH_RADIUS * source_vector_from_angles(livingston_detector_angles)
 
     # Baseline from Hanford to Livingston
     baseline = r_L - r_H
@@ -657,7 +718,7 @@ def time_delay_hanford_to_livingston(source_angles) :
     propagation_dir = -source_vector_from_angles(source_angles)
 
     # Return time delay (s)
-    return np.dot(propagation_dir, baseline) / speed_light
+    return np.dot(propagation_dir, baseline) / SPEED_OF_LIGHT
 
 #=========================================================================
 
@@ -899,13 +960,36 @@ def generate_model_angles_array(number_angular_samples) :
 
 #=========================================================================
 
-"""This function takes the number of desired model amplitude combinations [A_+, B_x, A_+, B_x] and the maximum allowed value for any amplitude and returns a NumPy array with the desired amplitude combinations."""
 def generate_model_amplitudes_array(number_amplitude_combinations, gw_max_amps) :
-    model_amplitudes_array = np.empty((number_amplitude_combinations,number_gw_modes))
-    for this_amplitude_combination in range(number_amplitude_combinations) :
-        new_amplitudes = np.random.rand(number_gw_modes)*gw_max_amps
-        model_amplitudes_array[this_amplitude_combination] = new_amplitudes
-    return model_amplitudes_array
+    """
+    Generates a NumPy array of random gravitational wave amplitude combinations. This function takes the number of desired model amplitude combinations 
+    [A_+, B_x, A_+, B_x] and the maximum allowed value for any amplitude and returns a NumPy array with the desired amplitude combinations.
+
+
+    Parameters:
+        number_amplitude_combinations (int): The number of random amplitude vectors to generate.
+        gw_max_amps (float): The maximum possible value for any individual amplitude component.
+
+    Returns:
+        np.ndarray: A 2D NumPy array of shape (number_amplitude_combinations, number_gw_modes),
+                    where each row is a random amplitude vector [A_+, B_x, A_+, B_x],
+                    with each component sampled uniformly from [0, gw_max_amps).
+
+    Note:
+        The number of gravitational wave modes (`number_gw_modes`) must be defined in the global scope.
+    """
+    
+    # model_amplitudes_array = np.empty((number_amplitude_combinations,number_gw_modes))
+    # for this_amplitude_combination in range(number_amplitude_combinations) :
+    #     new_amplitudes = np.random.rand(number_gw_modes)*gw_max_amps
+    #     model_amplitudes_array[this_amplitude_combination] = new_amplitudes
+    # return model_amplitudes_array
+    
+    
+    #Abid's optimized implementation:
+    
+    return np.random.rand(number_amplitude_combinations, NUMBER_GW_MODES) * gw_max_amps
+
 
 #=========================================================================
 
@@ -1015,7 +1099,7 @@ def generate_model_detector_responses(
     time_array = generate_network_time_array(
         signal_lifetime,
         detector_sampling_rate,
-        maximum_hanford_livingston_time_delay,
+        MAX_HANFORD_LIVINGSTON_DELAY,
     )
     n_times = time_array.size
 
@@ -1060,8 +1144,25 @@ def generate_model_detector_responses(
 
 #=========================================================================
 
-"""This function takes a maximum noise amplitude and a number of time samples and returns random (non-Gaussian) noise between zero and the appropriate maximum for each time sample."""
 def generate_noise_array(max_noise_amp,number_time_samples) :
+    
+    """
+    Generates a 1D NumPy array of random non-Gaussian noise values. This function takes a maximum noise amplitude and a number of time samples 
+    and returns random (non-Gaussian) noise between zero and the appropriate maximum for each time sample.
+
+    Parameters:
+        max_noise_amp (float): The maximum possible amplitude of the noise.
+        number_time_samples (int): The total number of discrete time samples.
+
+    Returns:
+        np.ndarray: A 1D NumPy array of shape (number_time_samples,) containing 
+                    uniformly distributed random noise values in the range [0, max_noise_amp).
+
+    Note:
+        The noise generated is non-Gaussian (uniform distribution) and intended 
+        to simulate random fluctuations at each time sample.
+    """
+    
     noise_array = np.random.rand(number_time_samples)*max_noise_amp
     return noise_array
 
@@ -1073,121 +1174,323 @@ and the sampling rate of the detectors -- and three model parameters -- the maxi
 -- indexed by 1) angle combination 2) amplitude combination 3) time sample and 4) detector -- and the "true" simulated source angles for each angle combination referenced by the detector response array. 
 Note that there is a great deal of repeated information in these arrays, 
 but they are intentionally size-matched with the outputs of the function "generate_model_detector_responses" to ease later array computations."""
-def generate_real_detector_responses(signal_frequency,signal_lifetime,detector_sampling_rate,gw_max_amps,number_amplitude_combinations,number_angular_samples,max_noise_amp) :
-    time_array = generate_network_time_array(signal_lifetime,detector_sampling_rate,maximum_hanford_livingston_time_delay)
+
+#Original Implementation:
+
+# def generate_real_detector_responses(signal_frequency,signal_lifetime,detector_sampling_rate,gw_max_amps,number_amplitude_combinations,number_angular_samples,max_noise_amp) :
+#     time_array = generate_network_time_array(signal_lifetime,detector_sampling_rate,maximum_hanford_livingston_time_delay)
+#     number_time_samples = time_array.size
+#     real_amplitudes = generate_model_amplitudes_array(1, gw_max_amps)[0]
+#     real_angles = generate_model_angles_array(1)[0]
+#     [fplus_hanford,fcross_hanford] = beam_pattern_response_functions(hanford_detector_angles,real_angles)
+#     [fplus_livingston,fcross_livingston] = beam_pattern_response_functions(livingston_detector_angles,real_angles)
+#     hanford_livingston_time_delay = time_delay_hanford_to_livingston(real_angles)
+#     hanford_oscillatory_terms = generate_oscillatory_terms(signal_lifetime,signal_frequency,time_array,0)
+#     livingston_oscillatory_terms = generate_oscillatory_terms(signal_lifetime,signal_frequency,time_array,hanford_livingston_time_delay)
+#     small_detector_response_array = np.empty((number_time_samples,number_detectors))
+#     hanford_noise_array = generate_noise_array(max_noise_amp,number_time_samples)
+#     livingston_noise_array = generate_noise_array(max_noise_amp,number_time_samples)
+#     for this_sample_time in range(number_time_samples) :
+#         small_detector_response_array[this_sample_time,0] = np.dot(real_amplitudes,hanford_oscillatory_terms[this_sample_time]*[fplus_hanford,fplus_hanford,fcross_hanford,fcross_hanford]) + hanford_noise_array[this_sample_time]
+#         small_detector_response_array[this_sample_time,1] = np.dot(real_amplitudes,livingston_oscillatory_terms[this_sample_time]*[fplus_livingston,fplus_livingston,fcross_livingston,fcross_livingston]) + livingston_noise_array[this_sample_time]
+    
+#      #Space Complexity issue
+#     real_angles_array = np.empty((number_angular_samples,number_source_angles))
+    
+#     #Space Complexity issue
+#     real_detector_response_array = np.empty((number_angular_samples,number_amplitude_combinations,number_time_samples,number_detectors))
+    
+#     """2. Redundant Data Storage
+
+#     real_detector_response_array stores identical copies of the same detector response across all angle/amplitude combinations
+#     real_angles_array repeats the same angles for every sample
+#     Multiple intermediate arrays are created unnecessarily"""
+    
+    
+    
+#     for this_angle_set in range(number_angular_samples) :
+        
+#         real_angles_array[this_angle_set] = real_angles
+#         for this_amplitude_combination in range(number_amplitude_combinations) :
+#             real_detector_response_array[this_angle_set,this_amplitude_combination] = small_detector_response_array
+#     return [real_detector_response_array,real_angles_array]
+
+
+# Abid's optimized implementation:
+
+def generate_real_detector_responses(signal_frequency, signal_lifetime, detector_sampling_rate,
+                                     gw_max_amps, number_amplitude_combinations,
+                                     number_angular_samples, max_noise_amp):
+    """
+    Efficiently generates a simulated detector response for one gravitational wave signal,
+    duplicating it across model parameter combinations to match later processing.
+
+    Returns:
+        real_detector_response_array: shape (n_angles, n_amps, n_times, n_detectors)
+        real_angles_array: shape (n_angles, 3)
+    """
+    # 1. Setup
+    time_array = generate_network_time_array(signal_lifetime, detector_sampling_rate, MAX_HANFORD_LIVINGSTON_DELAY)
     number_time_samples = time_array.size
+
+    # 2. Sample 1 true amplitude and angle
     real_amplitudes = generate_model_amplitudes_array(1, gw_max_amps)[0]
     real_angles = generate_model_angles_array(1)[0]
-    [fplus_hanford,fcross_hanford] = beam_pattern_response_functions(hanford_detector_angles,real_angles)
-    [fplus_livingston,fcross_livingston] = beam_pattern_response_functions(livingston_detector_angles,real_angles)
-    hanford_livingston_time_delay = time_delay_hanford_to_livingston(real_angles)
-    hanford_oscillatory_terms = generate_oscillatory_terms(signal_lifetime,signal_frequency,time_array,0)
-    livingston_oscillatory_terms = generate_oscillatory_terms(signal_lifetime,signal_frequency,time_array,hanford_livingston_time_delay)
-    small_detector_response_array = np.empty((number_time_samples,number_detectors))
-    hanford_noise_array = generate_noise_array(max_noise_amp,number_time_samples)
-    livingston_noise_array = generate_noise_array(max_noise_amp,number_time_samples)
-    for this_sample_time in range(number_time_samples) :
-        small_detector_response_array[this_sample_time,0] = np.dot(real_amplitudes,hanford_oscillatory_terms[this_sample_time]*[fplus_hanford,fplus_hanford,fcross_hanford,fcross_hanford]) + hanford_noise_array[this_sample_time]
-        small_detector_response_array[this_sample_time,1] = np.dot(real_amplitudes,livingston_oscillatory_terms[this_sample_time]*[fplus_livingston,fplus_livingston,fcross_livingston,fcross_livingston]) + livingston_noise_array[this_sample_time]
-    
-     #Space Complexity issue
-    real_angles_array = np.empty((number_angular_samples,number_source_angles))
-    
-    #Space Complexity issue
-    real_detector_response_array = np.empty((number_angular_samples,number_amplitude_combinations,number_time_samples,number_detectors))
-    
-    """2. Redundant Data Storage
 
-    real_detector_response_array stores identical copies of the same detector response across all angle/amplitude combinations
-    real_angles_array repeats the same angles for every sample
-    Multiple intermediate arrays are created unnecessarily"""
-    
-    
-    
-    for this_angle_set in range(number_angular_samples) :
-        
-        real_angles_array[this_angle_set] = real_angles
-        for this_amplitude_combination in range(number_amplitude_combinations) :
-            real_detector_response_array[this_angle_set,this_amplitude_combination] = small_detector_response_array
-    return [real_detector_response_array,real_angles_array]
+    # 3. Detector beam pattern responses
+    fplus_hanford, fcross_hanford = beam_pattern_response_functions(hanford_detector_angles, real_angles)
+    fplus_livingston, fcross_livingston = beam_pattern_response_functions(livingston_detector_angles, real_angles)
+
+    # 4. Time delay and oscillatory terms
+    time_delay = time_delay_hanford_to_livingston(real_angles)
+    osc_hanford = generate_oscillatory_terms(signal_lifetime, signal_frequency, time_array, 0)
+    osc_livingston = generate_oscillatory_terms(signal_lifetime, signal_frequency, time_array, time_delay)
+
+    # 5. Noise arrays
+    noise_h = generate_noise_array(max_noise_amp, number_time_samples)
+    noise_l = generate_noise_array(max_noise_amp, number_time_samples)
+
+    # 6. Combine signal + noise for both detectors using broadcasting
+    weights_h = np.array([fplus_hanford, fplus_hanford, fcross_hanford, fcross_hanford])
+    weights_l = np.array([fplus_livingston, fplus_livingston, fcross_livingston, fcross_livingston])
+
+    signal_h = np.dot(osc_hanford * weights_h, real_amplitudes)
+    signal_l = np.dot(osc_livingston * weights_l, real_amplitudes)
+
+    # Shape: (time_samples, detectors)
+    small_response = np.stack([signal_h + noise_h, signal_l + noise_l], axis=1)
+
+    # 7. Efficient duplication using broadcasting
+    real_detector_response_array = np.broadcast_to(
+        small_response[None, None, :, :],
+        (number_angular_samples, number_amplitude_combinations, number_time_samples, NUMBER_DETECTORS)
+    ).copy()
+
+    real_angles_array = np.broadcast_to(
+        real_angles[None, :],
+        (number_angular_samples, NUMBER_SOURCE_ANGLES)
+    ).copy()
+
+    return real_detector_response_array, real_angles_array
+
 
 #=========================================================================
 
-""".This function takes NumPy arrays containing the "real" (simulated) detector responses and source angles and the model detector responses and source angles 
-and returns the sum of the absolute values of the differences between the "real" (simulated) angles and 1) the angles in model_angles_array that are closest to the "real" angles (i.e., 
-the best the fitting procedure could have done given the model angles it used) 2) the angles produced by finding the single best time-and-site summed model detector response and using the angles 
-that produce it and 3) the angles produced by weighting the time-and-site summed detector responses, summing them over all amplitude combinations, and using the angles produced by maximizing that sum.
 
-"""
+#Original Implementation:
 
-def get_best_fit_angles_deltas(real_detector_responses,real_angles_array,model_detector_responses,model_angles_array) :
-    real_model_angle_deltas = np.absolute(real_angles_array - model_angles_array)
-    summed_real_model_angle_deltas = np.sum(real_model_angle_deltas,-1)
-    minimum_summed_angle_delta = np.min(summed_real_model_angle_deltas)
-    position_minimum_angles_delta = np.where(summed_real_model_angle_deltas == minimum_summed_angle_delta)
-    angles_minimum_angles_delta = model_angles_array[position_minimum_angles_delta[0]]
-    real_minimum_angles_deltas = np.absolute(real_angles_array[0] - angles_minimum_angles_delta)
-    sum_real_minimum_angle_deltas = np.sum(real_minimum_angles_deltas)
 
-    single_best_fit_start_time = time.process_time()
-    real_model_response_deltas = np.absolute(real_detector_responses - model_detector_responses)
-    summed_real_model_response_deltas = np.sum(real_model_response_deltas,axis=(-1,-2))
-    minimum_summed_response_delta = np.min(summed_real_model_response_deltas)
-    position_minimum_response_delta = np.where(summed_real_model_response_deltas == minimum_summed_response_delta)
-    angles_minimum_response_delta = model_angles_array[position_minimum_response_delta[0]]
-    real_minimum_response_angle_deltas = np.absolute(real_angles_array[0] - angles_minimum_response_delta)
-    sum_real_minimum_response_angle_deltas = np.sum(real_minimum_response_angle_deltas)
-    single_best_fit_end_time = time.process_time()
-    single_best_fit_time = single_best_fit_end_time - single_best_fit_start_time
+# """.This function takes NumPy arrays containing the "real" (simulated) detector responses and source angles and the model detector responses and source angles 
+# and returns the sum of the absolute values of the differences between the "real" (simulated) angles and 1) the angles in model_angles_array that are closest to the "real" angles (i.e., 
+# the best the fitting procedure could have done given the model angles it used) 2) the angles produced by finding the single best time-and-site summed model detector response and using the angles 
+# that produce it and 3) the angles produced by weighting the time-and-site summed detector responses, summing them over all amplitude combinations, and using the angles produced by maximizing that sum.
 
-    weighted_best_fit_start_time = time.process_time()
-    offset_matrix = np.ones(summed_real_model_response_deltas.shape)
-    fractional_summed_real_model_response_deltas = 1/minimum_summed_response_delta * summed_real_model_response_deltas
-    weighted_summed_real_model_response_deltas = np.exp(offset_matrix - fractional_summed_real_model_response_deltas**weighting_power)
-    summed_weighted_summed_real_model_response_deltas = np.sum(weighted_summed_real_model_response_deltas,axis=-1)
-    maximum_summed_weighted_response_delta = np.max(summed_weighted_summed_real_model_response_deltas)
-    position_maximum_summed_weighted_response_delta = np.where(summed_weighted_summed_real_model_response_deltas == maximum_summed_weighted_response_delta)
-    angles_maximum_summed_weighted_response_delta = model_angles_array[position_maximum_summed_weighted_response_delta[0]]
-    real_maximum_weighted_response_angle_deltas = np.absolute(real_angles_array[0] - angles_maximum_summed_weighted_response_delta)
-    sum_real_maximum_weighted_response_angle_deltas = np.sum(real_maximum_weighted_response_angle_deltas)
-    weighted_best_fit_end_time = time.process_time()
-    weighted_best_fit_time = weighted_best_fit_end_time - weighted_best_fit_start_time
+# """
 
-    return [sum_real_minimum_angle_deltas,sum_real_minimum_response_angle_deltas,sum_real_maximum_weighted_response_angle_deltas,single_best_fit_time,weighted_best_fit_time]
+# def get_best_fit_angles_deltas(real_detector_responses,real_angles_array,model_detector_responses,model_angles_array) :
+#     real_model_angle_deltas = np.absolute(real_angles_array - model_angles_array)
+#     summed_real_model_angle_deltas = np.sum(real_model_angle_deltas,-1)
+#     minimum_summed_angle_delta = np.min(summed_real_model_angle_deltas)
+#     position_minimum_angles_delta = np.where(summed_real_model_angle_deltas == minimum_summed_angle_delta)
+#     angles_minimum_angles_delta = model_angles_array[position_minimum_angles_delta[0]]
+#     real_minimum_angles_deltas = np.absolute(real_angles_array[0] - angles_minimum_angles_delta)
+#     sum_real_minimum_angle_deltas = np.sum(real_minimum_angles_deltas)
+
+#     single_best_fit_start_time = time.process_time()
+#     real_model_response_deltas = np.absolute(real_detector_responses - model_detector_responses)
+#     summed_real_model_response_deltas = np.sum(real_model_response_deltas,axis=(-1,-2))
+#     minimum_summed_response_delta = np.min(summed_real_model_response_deltas)
+#     position_minimum_response_delta = np.where(summed_real_model_response_deltas == minimum_summed_response_delta)
+#     angles_minimum_response_delta = model_angles_array[position_minimum_response_delta[0]]
+#     real_minimum_response_angle_deltas = np.absolute(real_angles_array[0] - angles_minimum_response_delta)
+#     sum_real_minimum_response_angle_deltas = np.sum(real_minimum_response_angle_deltas)
+#     single_best_fit_end_time = time.process_time()
+#     single_best_fit_time = single_best_fit_end_time - single_best_fit_start_time
+
+#     weighted_best_fit_start_time = time.process_time()
+#     offset_matrix = np.ones(summed_real_model_response_deltas.shape)
+#     fractional_summed_real_model_response_deltas = 1/minimum_summed_response_delta * summed_real_model_response_deltas
+#     weighted_summed_real_model_response_deltas = np.exp(offset_matrix - fractional_summed_real_model_response_deltas**weighting_power)
+#     summed_weighted_summed_real_model_response_deltas = np.sum(weighted_summed_real_model_response_deltas,axis=-1)
+#     maximum_summed_weighted_response_delta = np.max(summed_weighted_summed_real_model_response_deltas)
+#     position_maximum_summed_weighted_response_delta = np.where(summed_weighted_summed_real_model_response_deltas == maximum_summed_weighted_response_delta)
+#     angles_maximum_summed_weighted_response_delta = model_angles_array[position_maximum_summed_weighted_response_delta[0]]
+#     real_maximum_weighted_response_angle_deltas = np.absolute(real_angles_array[0] - angles_maximum_summed_weighted_response_delta)
+#     sum_real_maximum_weighted_response_angle_deltas = np.sum(real_maximum_weighted_response_angle_deltas)
+#     weighted_best_fit_end_time = time.process_time()
+#     weighted_best_fit_time = weighted_best_fit_end_time - weighted_best_fit_start_time
+
+#     return [sum_real_minimum_angle_deltas,sum_real_minimum_response_angle_deltas,sum_real_maximum_weighted_response_angle_deltas,single_best_fit_time,weighted_best_fit_time]
+
+
+#Abid's optimized implementation:
+
+def get_best_fit_angles_deltas(real_detector_responses, real_angles_array,
+                                model_detector_responses, model_angles_array):
+    """
+    Compares real (simulated) source angles with:
+    1. The closest angles in the model (oracle best).
+    2. The angles from the best-matching model detector response (single best fit).
+    3. The angles from a weighted average over all model responses (weighted fit).
+
+    Parameters:
+        real_detector_responses (np.ndarray): Shape (n_angles, n_amps, n_times, n_detectors).
+        real_angles_array (np.ndarray): Shape (n_angles, 3). Simulated source angles.
+        model_detector_responses (np.ndarray): Shape (n_angles, n_amps, n_times, n_detectors).
+        model_angles_array (np.ndarray): Shape (n_angles, 3). Modeled source angles.
+
+    Returns:
+        list: [
+            sum_real_minimum_angle_deltas,
+            sum_real_minimum_response_angle_deltas,
+            sum_real_maximum_weighted_response_angle_deltas,
+            single_best_fit_time,
+            weighted_best_fit_time
+        ]
+    """
+    # 1. Oracle best: angle delta to closest model angle
+    angle_deltas = np.abs(real_angles_array[0] - model_angles_array)
+    summed_angle_deltas = np.sum(angle_deltas, axis=1)
+    min_angle_idx = np.argmin(summed_angle_deltas)
+    sum_real_minimum_angle_deltas = np.sum(np.abs(real_angles_array[0] - model_angles_array[min_angle_idx]))
+
+    # 2. Single best fit: minimum total difference in detector responses
+    t_start = time.process_time()
+    response_deltas = np.abs(real_detector_responses - model_detector_responses)
+    summed_response_deltas = np.sum(response_deltas, axis=(-1, -2))  # shape: (n_angles, n_amps)
+    min_response_idx = np.unravel_index(np.argmin(summed_response_deltas), summed_response_deltas.shape)
+    best_fit_angles = model_angles_array[min_response_idx[0]]
+    sum_real_minimum_response_angle_deltas = np.sum(np.abs(real_angles_array[0] - best_fit_angles))
+    t_single_fit = time.process_time() - t_start
+
+    # 3. Weighted best fit
+    t_start = time.process_time()
+    fractional_deltas = summed_response_deltas / np.min(summed_response_deltas)
+    weights = np.exp(1 - fractional_deltas**WEIGHTING_POWER)
+    summed_weights = np.sum(weights, axis=1)
+    weighted_idx = np.argmax(summed_weights)
+    weighted_angles = model_angles_array[weighted_idx]
+    sum_real_maximum_weighted_response_angle_deltas = np.sum(np.abs(real_angles_array[0] - weighted_angles))
+    t_weighted_fit = time.process_time() - t_start
+
+    return [
+        sum_real_minimum_angle_deltas,
+        sum_real_minimum_response_angle_deltas,
+        sum_real_maximum_weighted_response_angle_deltas,
+        t_single_fit,
+        t_weighted_fit
+    ]
+
 
 #========================================================================= START OF DRIVER FUNCTIONS =========================================================================
 
 
-full_process_start_time = time.process_time()
-gw_frequency = 100
-gw_lifetime = 0.03
-detector_sampling_rate = ligo_detector_sampling_rate
-gw_max_amps = 1
-max_noise_amp = 0.1
+# full_process_start_time = time.process_time()
+# gw_frequency = 100
+# gw_lifetime = 0.03
+# detector_sampling_rate = LIGO_DETECTOR_SAMPLING_RATE
+# gw_max_amps = 1
+# max_noise_amp = 0.1
 
-# Number of samples for angles and amplitudes
-number_angular_samples = 100
-number_amplitude_combinations = 100
-#########################################
+# # Number of samples for angles and amplitudes
+# number_angular_samples = 100
+# number_amplitude_combinations = 100
+# #########################################
 
 
-[model_detector_responses,model_angles_array] = generate_model_detector_responses(gw_frequency,gw_lifetime,detector_sampling_rate,gw_max_amps,number_amplitude_combinations,number_angular_samples)
-[real_detector_responses,real_angles_array] = generate_real_detector_responses(gw_frequency,gw_lifetime,detector_sampling_rate,gw_max_amps,number_amplitude_combinations,number_angular_samples,max_noise_amp)
-best_fit_data = get_best_fit_angles_deltas(real_detector_responses,real_angles_array,model_detector_responses,model_angles_array)
-full_process_end_time = time.process_time()
-full_process_time = full_process_end_time - full_process_start_time
-end_time_string = time.strftime("%d_%b_%Y_%H%M%S",)
-file_name = "northstar-ouput-" + end_time_string + ".txt"
+# [model_detector_responses,model_angles_array] = generate_model_detector_responses(gw_frequency,gw_lifetime,detector_sampling_rate,gw_max_amps,number_amplitude_combinations,number_angular_samples)
+# [real_detector_responses,real_angles_array] = generate_real_detector_responses(gw_frequency,gw_lifetime,detector_sampling_rate,gw_max_amps,number_amplitude_combinations,number_angular_samples,max_noise_amp)
+# best_fit_data = get_best_fit_angles_deltas(real_detector_responses,real_angles_array,model_detector_responses,model_angles_array)
+# full_process_end_time = time.process_time()
+# full_process_time = full_process_end_time - full_process_start_time
+# end_time_string = time.strftime("%d_%b_%Y_%H%M%S",)
+# file_name = "northstar-ouput-" + end_time_string + ".txt"
 
-with open(file_name,"w") as file:
-    file.write("The best possible fit angle delta (in radians) was: " + str(best_fit_data[0]))
-    file.write("\n")
-    file.write("The single best fit algorithm angle delta (in radians) was: " + str(best_fit_data[1]))
-    file.write("\n")
-    file.write("The weighted best fit algorithm angle delta (in radians) was: " + str(best_fit_data[2]))
-    file.write("\n")
-    file.write("The full process run time (in seconds) was: " + str(full_process_time))
-    file.write("\n")
-    file.write("The single best fit algorithm run time (in seconds) was: " + str(best_fit_data[3]))
-    file.write("\n")
-    file.write("The weighted best fit algorithm run time (in seconds) was: " + str(best_fit_data[4]))
+# with open(file_name,"w") as file:
+#     file.write("The best possible fit angle delta (in radians) was: " + str(best_fit_data[0]))
+#     file.write("\n")
+#     file.write("The single best fit algorithm angle delta (in radians) was: " + str(best_fit_data[1]))
+#     file.write("\n")
+#     file.write("The weighted best fit algorithm angle delta (in radians) was: " + str(best_fit_data[2]))
+#     file.write("\n")
+#     file.write("The full process run time (in seconds) was: " + str(full_process_time))
+#     file.write("\n")
+#     file.write("The single best fit algorithm run time (in seconds) was: " + str(best_fit_data[3]))
+#     file.write("\n")
+#     file.write("The weighted best fit algorithm run time (in seconds) was: " + str(best_fit_data[4]))
+
+
+import time
+
+def run_northstar_pipeline(
+    gw_frequency=100,
+    gw_lifetime=0.03,
+    detector_sampling_rate=LIGO_DETECTOR_SAMPLING_RATE,
+    gw_max_amps=1,
+    max_noise_amp=0.1,
+    number_angular_samples=100,
+    number_amplitude_combinations=100
+):
+    start_time = time.process_time()
+
+    # Generate synthetic model and noisy real detector responses
+    model_responses, model_angles = generate_model_detector_responses(
+        gw_frequency,
+        gw_lifetime,
+        detector_sampling_rate,
+        gw_max_amps,
+        number_amplitude_combinations,
+        number_angular_samples
+    )
+
+    real_responses, real_angles = generate_real_detector_responses(
+        gw_frequency,
+        gw_lifetime,
+        detector_sampling_rate,
+        gw_max_amps,
+        number_amplitude_combinations,
+        number_angular_samples,
+        max_noise_amp
+    )
+
+    # Run the angle comparison algorithms
+    best_fit_data = get_best_fit_angles_deltas(
+        real_responses,
+        real_angles,
+        model_responses,
+        model_angles
+    )
+
+    end_time = time.process_time()
+    total_runtime = end_time - start_time
+
+    # Create a human-readable timestamped filename
+    timestamp = time.strftime("%d_%b_%Y_%H-%M-%S")
+    filename = f"OPTIMIZED_northstar_output_{timestamp}.txt"
+
+    # Format results
+    results = [
+        f"The best possible fit angle delta (in radians) was: {best_fit_data[0]:.6f}",
+        f"The single best fit algorithm angle delta (in radians) was: {best_fit_data[1]:.6f}",
+        f"The weighted best fit algorithm angle delta (in radians) was: {best_fit_data[2]:.6f}",
+        f"The full process run time (in seconds) was: {total_runtime:.4f}",
+        f"The single best fit algorithm run time (in seconds) was: {best_fit_data[3]:.4f}",
+        f"The weighted best fit algorithm run time (in seconds) was: {best_fit_data[4]:.4f}"
+    ]
+
+    # Print to terminal
+    print("\n[Optimized Northstar Run Summary]")
+    for line in results:
+        print(line)
+
+    # Write to file
+    with open(filename, "w") as f:
+        for line in results:
+            f.write(line + "\n")
+
+    print(f"\n[✔] Output also written to: {filename}")
+
+# Optional: call main function
+if __name__ == "__main__":
+    run_northstar_pipeline()
+
