@@ -244,5 +244,5 @@ def main():
 
 if __name__ == "__main__":
     import cProfile
-    cProfile.run('main()', filename='northstar_profile.prof')
-    print("Profiling complete. View results with: snakeviz northstar_profile.prof")
+    cProfile.run('main()', filename='Original_profile.prof')
+    print("Profiling complete. View results with: snakeviz Original_profile.prof")

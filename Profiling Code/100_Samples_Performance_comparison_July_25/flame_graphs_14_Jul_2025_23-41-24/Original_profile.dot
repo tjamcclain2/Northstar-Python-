@@ -1,0 +1,15 @@
+digraph {
+	tooltip=" "
+	graph [fontname=Arial, nodesep=0.125, ranksep=0.25];
+	node [fontcolor=white, fontname=Arial, height=0, shape=box, style=filled, width=0];
+	edge [fontname=Arial];
+	15 [color="#ff0000", fontcolor="#ffffff", fontsize="10.00", label="~:0:<built-in method builtins.exec>\n100.00%\n(0.00%)\n1×", tooltip="~"];
+	15 -> 104 [arrowsize="1.00", color="#ff0000", fontcolor="#ff0000", fontsize="10.00", label="100.00%\n1×", labeldistance="4.00", penwidth="4.00"];
+	37 [color="#ff0000", fontcolor="#ffffff", fontsize="10.00", label="NS_profile_run:4:main\n99.99%\n(0.01%)\n1×", tooltip="/Users/jeem/Desktop/Northstar-Python-/Profiling Code/NS_profile_run.py"];
+	37 -> 57 [arrowsize="1.00", color="#fe0500", fontcolor="#fe0500", fontsize="10.00", label="99.56%\n1×", labeldistance="3.98", penwidth="3.98"];
+	57 [color="#fe0500", fontcolor="#ffffff", fontsize="10.00", label="NS_profile_run:133:generate_model_detector_responses\n99.56%\n(96.67%)\n1×", tooltip="/Users/jeem/Desktop/Northstar-Python-/Profiling Code/NS_profile_run.py"];
+	57 -> 69 [arrowsize="0.35", color="#0d1676", fontcolor="#0d1676", fontsize="10.00", label="2.31%\n26200000×", labeldistance="0.50", penwidth="0.50"];
+	69 [color="#0d1676", fontcolor="#ffffff", fontsize="10.00", label="multiarray:741:dot\n2.31%\n(2.31%)\n26202721×", tooltip="/opt/anaconda3/lib/python3.12/site-packages/numpy/core/multiarray.py"];
+	104 [color="#ff0000", fontcolor="#ffffff", fontsize="10.00", label="<string>:1:<module>\n100.00%\n(0.01%)\n1×", tooltip="<string>"];
+	104 -> 37 [arrowsize="1.00", color="#ff0000", fontcolor="#ff0000", fontsize="10.00", label="99.99%\n1×", labeldistance="4.00", penwidth="4.00"];
+}

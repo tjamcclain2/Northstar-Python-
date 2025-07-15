@@ -22,3 +22,18 @@ Profiling helps you **identify slow or inefficient parts** of a program so they 
 Install the required packages:
 ```bash
 pip install  snakeviz
+
+```
+
+🚀 Run the Profiler
+Use the following command to profile your script and save the output:
+
+```bash
+python -m cProfile -o profile_output.prof main.py
+
+```
+
+Then visualize it with:
+```bash
+snakeviz profile_output.prof
+```
