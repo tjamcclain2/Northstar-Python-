@@ -3,6 +3,8 @@
 """
 GW_CAE.py - Gravitational Wave Autoencoder Neural Network Cascade
 Converted from Colab notebook for local AWS EC2 execution
+https://drive.google.com/file/d/1rEJX0FvoY2KAROK6vYHAlyOO3fqHs2aF/view?usp=sharing
+link to download bg_list.txt as file is too big to be uploaded to github
 """
 
 import os
