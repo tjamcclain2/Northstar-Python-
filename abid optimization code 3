@@ -1,0 +1,82 @@
+code = r'''
+#include <iostream>
+#include <cmath>
+#include <chrono>
+#include <cuda_runtime.h>
+
+#define CHECK_CUDA(call) \
+    if ((call) != cudaSuccess) { \
+        std::cerr << "CUDA error at " << __FILE__ << ":" << __LINE__ << std::endl; \
+        exit(1); \
+    }
+
+#define NUMBER_DETECTORS 4
+#define NUMBER_GW_MODES 4
+#define NUMBER_TIME_SAMPLES 1024
+
+__global__ void simulate_waveform(float* output, int number_modes, int number_samples, float frequency, float amplitude) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= number_modes * number_samples) return;
+
+    int mode = idx / number_samples;
+    int t = idx % number_samples;
+
+    float phase_shift = mode * 3.14159f / 4.0f;
+    float value = amplitude * sinf(2.0f * 3.14159f * frequency * t / number_samples + phase_shift);
+    output[idx] = value;
+}
+
+int main() {
+    using Clock = std::chrono::high_resolution_clock;
+
+    const int total_elements = NUMBER_GW_MODES * NUMBER_TIME_SAMPLES;
+    float* d_output;
+    float* h_output = new float[total_elements];
+
+    CHECK_CUDA(cudaMalloc(&d_output, total_elements * sizeof(float)));
+
+    float frequency = 100.0f;
+    float amplitude = 1.0f;
+
+    int blockSize = 256;
+    int gridSize = (total_elements + blockSize - 1) / blockSize;
+
+    auto start = Clock::now();
+    simulate_waveform<<<gridSize, blockSize>>>(d_output, NUMBER_GW_MODES, NUMBER_TIME_SAMPLES, frequency, amplitude);
+    CHECK_CUDA(cudaDeviceSynchronize());
+    auto end = Clock::now();
+
+    CHECK_CUDA(cudaMemcpy(h_output, d_output, total_elements * sizeof(float), cudaMemcpyDeviceToHost));
+
+    std::cout << "Sample GPU waveform values:\\n";
+    for (int i = 0; i < 8; ++i) {
+        std::cout << h_output[i] << " ";
+    }
+    std::cout << "\\nGPU time: " << std::chrono::duration<double>(end - start).count() << "s\\n";
+
+    delete[] h_output;
+    cudaFree(d_output);
+    return 0;
+}
+'''
+with open("Northstar.cu", "w") as f:
+    f.write(code)
+
+
+
+
+
+
+
+!nvcc -O3 Northstar.cu -o Northstar
+
+
+
+!./Northstar
+
+
+
+
+
+
+
