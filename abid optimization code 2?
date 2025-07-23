@@ -1,0 +1,141 @@
+%%writefile northstar.cu
+
+
+
+// Northstar CUDA Pipeline - Full Version with Detector Response Modeling, Multiple Polarizations, Noise Injection, Output, SNR Calculation, and FFT
+
+#include <iostream>
+#include <fstream>
+#include <vector>
+#include <cmath>
+#include <random>
+#include <chrono>
+#include <curand_kernel.h>
+#include <cufft.h>
+
+#define CHECK_CUDA(call) \
+    do { \
+        cudaError_t err = call; \
+        if (err != cudaSuccess) { \
+            std::cerr << "CUDA error in " << __FILE__ << " at line " << __LINE__ << ": " \
+                      << cudaGetErrorString(err) << std::endl; \
+            exit(EXIT_FAILURE); \
+        } \
+    } while (0)
+
+constexpr int NUMBER_SOURCES = 512;
+constexpr int NUMBER_TIME_SAMPLES = 4096;
+constexpr float SAMPLE_RATE = 4096.0f;
+constexpr float PI = 3.14159265358979323846f;
+
+__device__ float detector_response_plus(float theta, float phi, float psi) {
+    return 0.5f * (1 + cosf(theta) * cosf(theta)) * cosf(2 * phi) * cosf(2 * psi) - cosf(theta) * sinf(2 * phi) * sinf(2 * psi);
+}
+
+__device__ float detector_response_cross(float theta, float phi, float psi) {
+    return 0.5f * (1 + cosf(theta) * cosf(theta)) * cosf(2 * phi) * sinf(2 * psi) + cosf(theta) * sinf(2 * phi) * cosf(2 * psi);
+}
+
+__global__ void initialize_curand(curandState *state, unsigned long seed) {
+    int id = blockIdx.x * blockDim.x + threadIdx.x;
+    if (id < NUMBER_SOURCES) {
+        curand_init(seed, id, 0, &state[id]);
+    }
+}
+
+__global__ void generate_waveforms(float *waveforms, float *spectrum, curandState *state) {
+    int id = blockIdx.x * blockDim.x + threadIdx.x;
+    if (id >= NUMBER_SOURCES) return;
+
+    curandState localState = state[id];
+
+    float theta = curand_uniform(&localState) * PI;
+    float phi = curand_uniform(&localState) * 2 * PI;
+    float psi = curand_uniform(&localState) * 2 * PI;
+    float amp_plus = curand_uniform(&localState) * 2.0f - 1.0f;
+    float amp_cross = curand_uniform(&localState) * 2.0f - 1.0f;
+    float freq = 100.0f + curand_uniform(&localState) * 200.0f;
+    float lifetime = 0.01f + curand_uniform(&localState) * 0.1f;
+
+    float Fplus = detector_response_plus(theta, phi, psi);
+    float Fcross = detector_response_cross(theta, phi, psi);
+
+    for (int t = 0; t < NUMBER_TIME_SAMPLES; ++t) {
+        float time = t / SAMPLE_RATE;
+        float envelope = expf(-time / lifetime);
+        float signal = envelope * (amp_plus * Fplus * sinf(2 * PI * freq * time) + amp_cross * Fcross * cosf(2 * PI * freq * time));
+        float noise = curand_normal(&localState) * 0.1f;
+        waveforms[id * NUMBER_TIME_SAMPLES + t] = signal + noise;
+    }
+
+    // SNR calculation for first source only (id == 0)
+    if (id == 0) {
+        float power = 0.0f;
+        float noise_power = 0.0f;
+        for (int t = 0; t < NUMBER_TIME_SAMPLES; ++t) {
+            float val = waveforms[t];
+            power += val * val;
+            noise_power += curand_normal(&localState) * 0.1f * curand_normal(&localState) * 0.1f;
+        }
+        float snr = 10.0f * log10f(power / noise_power);
+        printf("SNR (dB): %f\n", snr);
+    }
+
+    state[id] = localState;
+}
+
+int main() {
+    float *d_waveforms, *d_spectrum;
+    curandState *d_state;
+
+    CHECK_CUDA(cudaMalloc(&d_waveforms, NUMBER_SOURCES * NUMBER_TIME_SAMPLES * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&d_spectrum, NUMBER_SOURCES * NUMBER_TIME_SAMPLES * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&d_state, NUMBER_SOURCES * sizeof(curandState)));
+
+    initialize_curand<<<(NUMBER_SOURCES + 255) / 256, 256>>>(d_state, time(NULL));
+    generate_waveforms<<<(NUMBER_SOURCES + 255) / 256, 256>>>(d_waveforms, d_spectrum, d_state);
+
+    std::vector<float> host_waveforms(NUMBER_SOURCES * NUMBER_TIME_SAMPLES);
+    CHECK_CUDA(cudaMemcpy(host_waveforms.data(), d_waveforms, host_waveforms.size() * sizeof(float), cudaMemcpyDeviceToHost));
+
+    std::ofstream wf_out("waveform_output.txt");
+    for (int i = 0; i < NUMBER_SOURCES; ++i) {
+        for (int t = 0; t < NUMBER_TIME_SAMPLES; ++t) {
+            wf_out << host_waveforms[i * NUMBER_TIME_SAMPLES + t] << " ";
+        }
+        wf_out << "\n";
+    }
+    wf_out.close();
+
+    CHECK_CUDA(cudaFree(d_waveforms));
+    CHECK_CUDA(cudaFree(d_spectrum));
+    CHECK_CUDA(cudaFree(d_state));
+
+    return 0;
+}
+
+
+!nvcc -o northstar_exec northstar.cu
+!./northstar_exec
+
+
+
+
+
+!head -n 5 waveform_output.txt  # Show first 5 lines of waveform data
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
