@@ -1,0 +1,155 @@
+%%writefile gw_cuda_full.cu
+
+#include <iostream>
+#include <curand_kernel.h>
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
+constexpr int NUMBER_GW_MODES = 4;
+constexpr int NUMBER_SOURCE_ANGLES = 3;
+constexpr double EARTH_RADIUS = 6371000.0;
+constexpr double SPEED_LIGHT = 299792458.0;
+constexpr double MAXIMUM_HANFORD_LIVINGSTON_TIME_DELAY = 0.0100025673;
+
+__constant__ double HANFORD_DETECTOR_ANGLES[3] = {
+    (46.0 + 27.0/60.0 + 18.528/3600.0) * M_PI / 180.0,
+    (240.0 + 35.0/60.0 + 32.4343/3600.0) * M_PI / 180.0,
+    M_PI/2.0 + 125.9994 * M_PI / 180.0
+};
+__constant__ double LIVINGSTON_DETECTOR_ANGLES[3] = {
+    (30.0 + 33.0/60.0 + 46.4196/3600.0) * M_PI / 180.0,
+    (269.0 + 13.0/60.0 + 32.7346/3600.0) * M_PI / 180.0,
+    M_PI/2.0 + 197.7165 * M_PI / 180.0
+};
+
+// Convert angles to source vector
+__device__ void source_vector_from_angles(const double* angles, double* vec) {
+    double first = angles[0];
+    double second = angles[1];
+    vec[0] = cos(first) * cos(second);
+    vec[1] = cos(first) * sin(second);
+    vec[2] = sin(first);
+}
+
+__device__ double time_delay_hanford_to_livingston(const double* source_angles) {
+    double hanford_vec[3], livingston_vec[3];
+    source_vector_from_angles(HANFORD_DETECTOR_ANGLES, hanford_vec);
+    source_vector_from_angles(LIVINGSTON_DETECTOR_ANGLES, livingston_vec);
+
+    double position_vec[3] = {
+        EARTH_RADIUS * (livingston_vec[0] - hanford_vec[0]),
+        EARTH_RADIUS * (livingston_vec[1] - hanford_vec[1]),
+        EARTH_RADIUS * (livingston_vec[2] - hanford_vec[2])
+    };
+
+    double gw_vec[3];
+    source_vector_from_angles(source_angles, gw_vec);
+
+    double gw_z[3] = {-gw_vec[0], -gw_vec[1], -gw_vec[2]};
+
+    return (gw_z[0]*position_vec[0] + gw_z[1]*position_vec[1] + gw_z[2]*position_vec[2]) / SPEED_LIGHT;
+}
+
+// CUDA kernel
+__global__ void gw_analysis_kernel(
+    double* time_array, int number_time_samples,
+    double* angles, double* delays, double* amplitudes,
+    int number_angular_samples, int number_amplitude_combinations, unsigned int seed)
+{
+    int idx = blockDim.x * blockIdx.x + threadIdx.x;
+
+    if (idx < number_time_samples) {
+        double sampling_rate = 10000.0;
+        double duration = 0.03 + MAXIMUM_HANFORD_LIVINGSTON_TIME_DELAY;
+        time_array[idx] = (idx - number_time_samples / 2) / sampling_rate;
+    }
+
+    if (idx < number_angular_samples) {
+        curandState state;
+        curand_init(seed, idx, 0, &state);
+
+        double decl = -M_PI/2 + M_PI * curand_uniform_double(&state);
+        double ra = 2 * M_PI * curand_uniform_double(&state);
+        double pol = 2 * M_PI * curand_uniform_double(&state);
+
+        angles[idx*3+0] = decl;
+        angles[idx*3+1] = ra;
+        angles[idx*3+2] = pol;
+
+        delays[idx] = time_delay_hanford_to_livingston(&angles[idx*3]);
+    }
+
+    if (idx < number_amplitude_combinations * NUMBER_GW_MODES) {
+        curandState state;
+        curand_init(seed + 1234, idx, 0, &state);
+
+        amplitudes[idx] = 2 * M_PI * curand_uniform_double(&state);
+    }
+}
+
+int main() {
+    const int number_time_samples = static_cast<int>((0.03 + MAXIMUM_HANFORD_LIVINGSTON_TIME_DELAY) * 10000.0) * 2;
+    const int number_angular_samples = 5;
+    const int number_amplitude_combinations = 10;
+
+    double* d_time_array; cudaMalloc(&d_time_array, number_time_samples * sizeof(double));
+    double* d_angles; cudaMalloc(&d_angles, number_angular_samples * NUMBER_SOURCE_ANGLES * sizeof(double));
+    double* d_delays; cudaMalloc(&d_delays, number_angular_samples * sizeof(double));
+    double* d_amplitudes; cudaMalloc(&d_amplitudes, number_amplitude_combinations * NUMBER_GW_MODES * sizeof(double));
+
+    int threads = 256;
+    int total_tasks = max(max(number_time_samples, number_angular_samples), number_amplitude_combinations * NUMBER_GW_MODES);
+    int blocks = (total_tasks + threads - 1) / threads;
+
+    gw_analysis_kernel<<<blocks, threads>>>(d_time_array, number_time_samples, d_angles, d_delays, d_amplitudes,
+                                            number_angular_samples, number_amplitude_combinations, time(NULL));
+
+    cudaDeviceSynchronize();
+
+    double time_array[5];
+    double angles[5*3], delays[5];
+
+    cudaMemcpy(time_array, d_time_array + number_time_samples/2, 5*sizeof(double), cudaMemcpyDeviceToHost);
+    cudaMemcpy(angles, d_angles, 5*3*sizeof(double), cudaMemcpyDeviceToHost);
+    cudaMemcpy(delays, d_delays, 5*sizeof(double), cudaMemcpyDeviceToHost);
+
+    std::cout << "First few time samples: ";
+    for (int i = 0; i < 5; ++i) {
+        std::cout << time_array[i] << " ";
+    }
+    std::cout << "\\n";
+
+    std::cout << "First few angle sets:\\n";
+    for (int i = 0; i < 5; ++i) {
+        std::cout << "Sample " << i << ": "
+                  << angles[i*3] << ", "
+                  << angles[i*3+1] << ", "
+                  << angles[i*3+2] << "\\n";
+    }
+
+    std::cout << "Example time delay for first angle: " << delays[0] << " s\\n";
+
+    cudaFree(d_time_array);
+    cudaFree(d_angles);
+    cudaFree(d_delays);
+    cudaFree(d_amplitudes);
+
+    return 0;
+}
+
+!./gw_cuda_full
+
+
+
+
+
+
+
+
+
+
+
+
+
