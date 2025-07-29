@@ -1,0 +1,144 @@
+%%writefile gw_cuda_full_optimized.cu
+
+#include <iostream>
+#include <curand_kernel.h>
+#include <cmath>
+#include <cuda_runtime.h>
+
+#define CHECK_CUDA(call) \
+    do { \
+        cudaError_t err = call; \
+        if (err != cudaSuccess) { \
+            std::cerr << "CUDA error in " << __FILE__ << ":" << __LINE__ << " — " << cudaGetErrorString(err) << std::endl; \
+            exit(err); \
+        } \
+    } while (0)
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
+constexpr int NUMBER_GW_MODES = 4;
+constexpr int NUMBER_SOURCE_ANGLES = 3;
+
+__device__ double time_delay_hanford_to_livingston(const double* angles) {
+    double declination = angles[0];
+    double right_ascension = angles[1];
+
+    double x = cos(declination) * cos(right_ascension);
+    double y = cos(declination) * sin(right_ascension);
+    double z = sin(declination);
+
+    double dot_product = x * 0.2239 + y * (-0.7998) + z * 0.5569;
+    double distance = 3000.0;  // meters
+    return distance * dot_product / 299792458.0;
+}
+
+__global__ void generate_time_array(double* time_array, int n, double sampling_rate, int offset) {
+    int idx = blockDim.x * blockIdx.x + threadIdx.x;
+    if (idx < n) {
+        time_array[idx] = (idx - offset) / sampling_rate;
+    }
+}
+
+__global__ void generate_source_angles(double* angles, double* delays, int n, unsigned int seed) {
+    int idx = blockDim.x * blockIdx.x + threadIdx.x;
+    if (idx < n) {
+        curandState state;
+        curand_init(seed, idx, 0, &state);
+
+        double decl = -M_PI/2 + M_PI * curand_uniform_double(&state);
+        double ra = 2 * M_PI * curand_uniform_double(&state);
+        double pol = 2 * M_PI * curand_uniform_double(&state);
+
+        angles[idx * 3 + 0] = decl;
+        angles[idx * 3 + 1] = ra;
+        angles[idx * 3 + 2] = pol;
+
+        delays[idx] = time_delay_hanford_to_livingston(&angles[idx * 3]);
+    }
+}
+
+__global__ void generate_amplitudes(double* amplitudes, int total, unsigned int seed) {
+    int idx = blockDim.x * blockIdx.x + threadIdx.x;
+    if (idx < total) {
+        curandState state;
+        curand_init(seed + 1234, idx, 0, &state);
+        amplitudes[idx] = 2 * M_PI * curand_uniform_double(&state);
+    }
+}
+
+int main() {
+    const int number_time_samples = 8192;
+    const double sampling_rate = 4096.0;
+    const int number_sources = 1024;
+    const int offset = number_time_samples / 2;
+
+    // Allocate device memory
+    double *d_time_array, *d_angles, *d_delays, *d_amplitudes;
+    CHECK_CUDA(cudaMalloc(&d_time_array, number_time_samples * sizeof(double)));
+    CHECK_CUDA(cudaMalloc(&d_angles, number_sources * NUMBER_SOURCE_ANGLES * sizeof(double)));
+    CHECK_CUDA(cudaMalloc(&d_delays, number_sources * sizeof(double)));
+    CHECK_CUDA(cudaMalloc(&d_amplitudes, number_sources * NUMBER_GW_MODES * sizeof(double)));
+
+    // Launch kernels
+    int threadsPerBlock = 256;
+    int timeBlocks = (number_time_samples + threadsPerBlock - 1) / threadsPerBlock;
+    int sourceBlocks = (number_sources + threadsPerBlock - 1) / threadsPerBlock;
+    int ampBlocks = ((number_sources * NUMBER_GW_MODES) + threadsPerBlock - 1) / threadsPerBlock;
+
+    generate_time_array<<<timeBlocks, threadsPerBlock>>>(d_time_array, number_time_samples, sampling_rate, offset);
+    generate_source_angles<<<sourceBlocks, threadsPerBlock>>>(d_angles, d_delays, number_sources, time(NULL));
+    generate_amplitudes<<<ampBlocks, threadsPerBlock>>>(d_amplitudes, number_sources * NUMBER_GW_MODES, time(NULL));
+
+    CHECK_CUDA(cudaDeviceSynchronize());
+
+    // Copy back a few values to host
+    double time_samples_host[5], delays_host[5], amplitudes_host[5];
+    double angles_host[5 * NUMBER_SOURCE_ANGLES];
+
+    CHECK_CUDA(cudaMemcpy(time_samples_host, d_time_array, 5 * sizeof(double), cudaMemcpyDeviceToHost));
+    CHECK_CUDA(cudaMemcpy(delays_host, d_delays, 5 * sizeof(double), cudaMemcpyDeviceToHost));
+    CHECK_CUDA(cudaMemcpy(angles_host, d_angles, 5 * 3 * sizeof(double), cudaMemcpyDeviceToHost));
+    CHECK_CUDA(cudaMemcpy(amplitudes_host, d_amplitudes, 5 * sizeof(double), cudaMemcpyDeviceToHost));
+
+    // Output
+    std::cout << "\nSample Time Array:\n";
+    for (int i = 0; i < 5; ++i)
+        std::cout << "t[" << i << "] = " << time_samples_host[i] << " sec\n";
+
+    std::cout << "\nSample Source Angles (RA, Dec, Pol):\n";
+    for (int i = 0; i < 5; ++i)
+        std::cout << "source[" << i << "] = (" << angles_host[i*3+1] << ", " << angles_host[i*3+0] << ", " << angles_host[i*3+2] << ")\n";
+
+    std::cout << "\nSample Time Delays (Hanford to Livingston):\n";
+    for (int i = 0; i < 5; ++i)
+        std::cout << "delay[" << i << "] = " << delays_host[i] << " sec\n";
+
+    std::cout << "\nSample Amplitudes:\n";
+    for (int i = 0; i < 5; ++i)
+        std::cout << "amp[" << i << "] = " << amplitudes_host[i] << "\n";
+
+    std::cout << "\n✅ Simulation finished successfully.\n";
+
+    // Cleanup
+    cudaFree(d_time_array);
+    cudaFree(d_angles);
+    cudaFree(d_delays);
+    cudaFree(d_amplitudes);
+
+    return 0;
+}
+
+
+
+
+
+!nvcc -arch=sm_75 gw_cuda_full_optimized.cu -o gw_cuda_full_optimized
+
+
+
+
+!./gw_cuda_full_optimized
+
+
