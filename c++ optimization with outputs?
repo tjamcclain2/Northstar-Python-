@@ -1,0 +1,89 @@
+%%writefile generate_oscillatory_terms.cu
+#include <iostream>
+#include <cmath>
+#include <cuda_runtime.h>
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
+__global__ void generateOscillatoryTerms(double* output, int num_points, double dt, double signal_frequency) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= num_points) return;
+
+    constexpr int number_gw_modes = 4;
+    double t = i * dt;
+
+    // Gaussian envelope centered at 0.5s with stddev = 0.05s
+    double envelope = exp(-pow((t - 0.5) / 0.05, 2));
+
+    output[i * number_gw_modes + 0] = envelope * cos(2 * M_PI * signal_frequency * t);
+    output[i * number_gw_modes + 1] = envelope * sin(2 * M_PI * signal_frequency * t);
+    output[i * number_gw_modes + 2] = envelope * cos(4 * M_PI * signal_frequency * t);
+    output[i * number_gw_modes + 3] = envelope * sin(4 * M_PI * signal_frequency * t);
+}
+
+int main() {
+    constexpr int num_points = 1001;
+    constexpr double dt = 0.001;
+    constexpr double signal_frequency = 10.0;  // Hz
+    constexpr int number_gw_modes = 4;
+
+    double* d_output;
+    double* h_output = new double[num_points * number_gw_modes];
+
+    cudaMalloc(&d_output, num_points * number_gw_modes * sizeof(double));
+
+    int threadsPerBlock = 256;
+    int blocksPerGrid = (num_points + threadsPerBlock - 1) / threadsPerBlock;
+    generateOscillatoryTerms<<<blocksPerGrid, threadsPerBlock>>>(d_output, num_points, dt, signal_frequency);
+    cudaDeviceSynchronize();
+
+    cudaMemcpy(h_output, d_output, num_points * number_gw_modes * sizeof(double), cudaMemcpyDeviceToHost);
+
+    std::cout << "Output (cos/sin * gaussian for 4 modes):\n";
+    for (int i = 490; i <= 510; ++i) {
+        std::cout << "t=" << i * dt << " : ";
+        for (int j = 0; j < number_gw_modes; ++j) {
+            std::cout << h_output[i * number_gw_modes + j] << " ";
+        }
+        std::cout << "\n";
+    }
+
+    cudaFree(d_output);
+    delete[] h_output;
+    return 0;
+}
+
+
+
+
+
+
+
+
+!nvcc -arch=sm_75 generate_oscillatory_terms.cu -o generate_oscillatory_terms
+!./generate_oscillatory_terms
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
