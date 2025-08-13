@@ -1,0 +1,561 @@
+#Download packages
+!pip -q install gwpy pycbc matplotlib scipy --upgrade
+import os, math, random, numpy as np, pathlib
+import matplotlib.pyplot as plt
+
+import torch, torch.nn as nn, torch.nn.functional as F
+from torch.utils.data import Dataset, DataLoader
+
+from gwpy.timeseries import TimeSeries
+from scipy.signal import butter, sosfiltfilt, decimate, resample_poly, hilbert, savgol_filter
+
+#Mount notebook to drive (colab) change/remove as needed
+
+from google.colab import drive
+drive.mount('/content/drive')
+
+# —— Paths ——
+BANK_PATH = "/content/drive/MyDrive/gw_chirp_bank_20000.npy"  # <— update if needed
+CACHE_DIR = "/content/drive/MyDrive/gw_noise_cache"
+pathlib.Path(CACHE_DIR).mkdir(parents=True, exist_ok=True)
+
+#Generate noise bank (upscale w/ more robust parameter variation)
+from pycbc.waveform import get_td_waveform
+import numpy as np
+import random
+import time
+import matplotlib.pyplot as plt
+from google.colab import drive
+
+# --- Mount Google Drive ---
+drive.mount('/content/drive')
+
+# --- Parameters ---
+fs = 4096
+seg_len = int(4.0 * fs)
+num_chirps = 20000
+
+def shift_chirp_zero_pad(chirp_segment, desired_peak, fs=4096):
+    peak_idx = np.argmax(np.abs(chirp_segment))
+    shift = desired_peak - peak_idx
+
+    shifted = np.zeros_like(chirp_segment)
+
+    start_new = max(0, shift)
+    end_new = min(len(chirp_segment), shift + len(chirp_segment))
+
+    start_old = max(0, -shift)
+    end_old = min(len(chirp_segment), len(chirp_segment) - shift)
+
+    shifted[start_new:end_new] = chirp_segment[start_old:end_old]
+
+    return shifted
+
+# --- Chirp generation ---
+chirps = []
+start_time_global = time.time()
+
+print(f"[INFO] Generating {num_chirps} chirps...")
+for i in range(num_chirps):
+    m1 = random.uniform(20, 50)
+    m2 = random.uniform(20, 50)
+
+    hp, _ = get_td_waveform(approximant="IMRPhenomD",
+                            mass1=m1, mass2=m2,
+                            delta_t=1/fs,
+                            f_lower=20)
+    chirp_full = np.array(hp.data)
+
+    peak_idx = np.argmax(np.abs(chirp_full))
+    start_idx = max(0, peak_idx - int(2.0*fs))
+    end_idx = start_idx + seg_len
+    chirp_segment = chirp_full[start_idx:end_idx]
+
+    if len(chirp_segment) < seg_len:
+        chirp_segment = np.pad(chirp_segment, (0, seg_len - len(chirp_segment)))
+    elif len(chirp_segment) > seg_len:
+        chirp_segment = chirp_segment[:seg_len]
+
+    desired_peak = random.randint(int(1.0*fs), int(3.5*fs))
+    chirp_shifted = shift_chirp_zero_pad(chirp_segment, desired_peak)
+
+    chirps.append(chirp_shifted)
+
+    # --- Progress notification ---
+    if (i+1) % 100 == 0:
+        elapsed = time.time() - start_time_global
+        print(f"[INFO] Generated {i+1}/{num_chirps} chirps - Elapsed time: {elapsed:.2f} sec")
+
+# --- Convert to array ---
+chirps = np.array(chirps)
+
+# --- Save to Drive ---
+chirp_bank_path = "/content/drive/MyDrive/gw_chirp_bank_20000.npy"
+np.save(chirp_bank_path, chirps)
+
+total_time = time.time() - start_time_global
+print(f"[INFO] Saved {chirps.shape[0]} chirps to {chirp_bank_path}")
+print(f"[INFO] Total time: {total_time:.2f} sec")
+
+
+# Assuming noise bank is generated, grabs noise chunks
+FS_RAW = 4096        # your chirp bank SR
+FS     = 2048        # training SR (seq len 8192 for 4s)
+SEG_S  = 4.0
+N      = int(FS * SEG_S)     # 8192
+F_LO, F_HI = 20.0, 300.0
+
+# Load bank
+bank = np.load(BANK_PATH).astype(np.float32)
+print("Bank shape:", bank.shape)
+assert bank.ndim == 2 and bank.shape[1] == int(SEG_S*FS_RAW), "Unexpected bank dimensions for 4.0 s @ 4096 Hz."
+
+def bulk_fetch_until_target(path, target_windows=2000, seg_len=4.0, chunk_len=180, stations=('H1', 'L1')):
+    """
+    Keep fetching bulk noise chunks until target windows are reached.
+    Saves continuously to disk so you don't lose progress if interrupted.
+    """
+    import os
+    import numpy as np
+    from gwpy.timeseries import TimeSeries
+    import random
+
+    fs = int(TimeSeries.fetch_open_data('H1', 1126259462, 1126259462 + 4).sample_rate.value)
+    samples_per_win = int(seg_len * fs)
+    samples_per_chunk = int(chunk_len * fs)
+    windows_per_chunk = samples_per_chunk // samples_per_win
+
+    # Ensure file exists
+    if os.path.exists(path):
+        arr = np.load(path)
+        print(f"Found existing noise pool: {arr.shape}")
+    else:
+        arr = np.empty((0, samples_per_win))
+        print("Starting fresh noise pool.")
+
+    while arr.shape[0] < target_windows:
+        for station in stations:
+            if arr.shape[0] >= target_windows:
+                break
+            gps_start = random.randint(1126250000, 1187730000 - chunk_len)  # Pick random time in O1 run
+            try:
+                print(f"[{station}] fetching {chunk_len}s chunk…")
+                ts = TimeSeries.fetch_open_data(station, gps_start, gps_start + chunk_len)
+                ts = ts.highpass(20).lowpass(500)  # quick bandpass
+                chunk_data = ts.value
+                chunk_windows = chunk_data[:windows_per_chunk * samples_per_win].reshape(-1, samples_per_win)
+                arr = np.concatenate([arr, chunk_windows], axis=0)
+                np.save(path, arr)
+                print(f"  ↳ saved {arr.shape[0]}/{target_windows} windows total")
+            except Exception as e:
+                print(f"Error fetching {station}: {e}")
+    print("✅ Done.")
+    return arr
+
+# Run until 2000 windows
+noise_path = "/content/drive/MyDrive/gw_noise_cache/NOISE_bulk_H1+L1_sr4096.npy"
+noise_data = bulk_fetch_until_target(noise_path, target_windows=2000)
+
+#Preprocess input data (bandpass + taper)
+
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.signal import butter, sosfiltfilt
+from scipy.signal.windows import tukey
+
+FS = 4096
+BAND_LO, BAND_HI = 20, 300
+TARGET_SNR = 0.005           # use a low SNR to reproduce the artifact
+RAMP_SEC = 0.15              # taper length at each edge (seconds)
+EDGE_EXCLUDE_SNR = 0.4       # exclude edges from SNR calc (seconds each side)
+
+def bandpass(x, fs=FS, lo=BAND_LO, hi=BAND_HI, order=6):
+    sos = butter(order, [lo, hi], btype='band', fs=fs, output='sos')
+    return sosfiltfilt(sos, x).astype(np.float32)
+
+def edge_taper(N, fs=FS, ramp_s=RAMP_SEC):
+    """Raised-cosine taper with flat middle and cosine ramps of length ramp_s at both ends."""
+    ramp = int(max(1, round(ramp_s * fs)))
+    w = np.ones(N, dtype=np.float64)
+    if 2*ramp >= N:
+        # fall back to Tukey with alpha=1 (pure Hann) if window is too short
+        return tukey(N, alpha=1.0)
+    # left ramp: 0..ramp-1
+    n = np.arange(ramp)
+    w[:ramp] = 0.5*(1 - np.cos(np.pi*(n+1)/ramp))
+    # right ramp
+    w[-ramp:] = w[:ramp][::-1]
+    return w.astype(np.float32)
+
+def masked_snr_scale(noise, signal, mask, target_snr):
+    n_pow = np.sum((noise[mask])**2) + 1e-24
+    s_pow = np.sum((signal[mask])**2) + 1e-24
+    return signal * np.sqrt((target_snr**2 * n_pow) / s_pow)
+
+def measured_snr_masked(noise, sig, mask):
+    n_pow = np.sum((noise[mask])**2) + 1e-24
+    s_pow = np.sum((sig[mask])**2) + 1e-24
+    return np.sqrt(s_pow / n_pow)
+
+def qa_edge_taper(bank, noise_pool, target_snr=TARGET_SNR, ramp_s=RAMP_SEC):
+    # pick random 4 s chirp + noise
+    chirp = bank[np.random.randint(len(bank))].astype(np.float64)
+    noise = noise_pool[np.random.randint(len(noise_pool))].astype(np.float64)
+    L = min(len(chirp), len(noise))
+    chirp = chirp[:L]; noise = noise[:L]
+    t = np.arange(L) / FS
+
+    # Build an "active" mask for SNR scaling (ignore edges, tiny amplitudes)
+    mask = np.ones(L, dtype=bool)
+    pad = int(EDGE_EXCLUDE_SNR * FS)
+    if pad > 0:
+        mask[:pad] = False; mask[-pad:] = False
+    amp_thr = 0.01 * (np.max(np.abs(chirp)) + 1e-24)
+    mask &= (np.abs(chirp) >= amp_thr)
+
+    # Scale for masked SNR on RAW signals (before any bandpass)
+    chirp_scaled = masked_snr_scale(noise, chirp, mask, target_snr)
+    mix_raw = noise + chirp_scaled
+
+    # Bandpass the exact same raw mix once
+    mix_bp = bandpass(mix_raw, FS, BAND_LO, BAND_HI)
+
+    # Apply a short edge taper to the bandpassed input only
+    w = edge_taper(L, fs=FS, ramp_s=ramp_s)
+    mix_bp_tapered = mix_bp * w
+
+    # Diagnostics (masked SNR is computed pre-BP; post-BP will be similar but not identical)
+    snr_masked_meas = measured_snr_masked(noise, chirp_scaled, mask)
+    print(f"[QA] target masked SNR={target_snr:.4f} | measured masked SNR≈{snr_masked_meas:.4f} | "
+          f"taper ramp={ramp_s:.2f}s each edge")
+
+    # Plots: bandpassed w/o taper vs bandpassed + tapered
+    fig, axs = plt.subplots(2, 1, figsize=(12, 6), sharex=True)
+    axs[0].plot(t, mix_bp, lw=0.8)
+    axs[0].set_title(f"Bandpassed input (no taper) — note spikes near 0s & 4s at low SNR")
+    axs[0].set_ylabel("strain")
+
+    axs[1].plot(t, mix_bp_tapered, lw=0.8, color='orange')
+    axs[1].set_title(f"Bandpassed input × edge taper (ramp {ramp_s:.2f}s) — spikes suppressed")
+    axs[1].set_xlabel("Time [s]"); axs[1].set_ylabel("strain")
+
+    # shade the SNR-mask region (where training SNR is enforced)
+    for ax in axs:
+        y0, y1 = ax.get_ylim()
+        ax.fill_between(t, y0, y1, where=mask, color='gray', alpha=0.08, step='mid')
+    plt.tight_layout(); plt.show()
+
+# --- run once; re-run to sample new pair ---
+qa_edge_taper(bank, noise_pool, target_snr=0.01, ramp_s=0.15)
+
+# ========================= PURE DENOISING TRAINER (MSE) =========================
+import os, numpy as np, torch, torch.nn as nn, torch.nn.functional as F
+from torch.utils.data import Dataset, DataLoader
+import matplotlib.pyplot as plt
+from tqdm.auto import tqdm
+from scipy.signal import butter, sosfiltfilt, resample_poly
+
+# ------------------------------- CONFIG --------------------------------
+FS_RAW = 4096           # Hz (bank & noise)
+FS = 2048               # Hz (training rate)
+BAND_LO, BAND_HI = 20, 300
+EDGE_TAPER_S = 0.40     # s, cosine ramp at both ends (input only)
+CROP_S = 0.50           # s, center-crop for loss
+BATCH = 32
+EPOCHS = 100
+LR = 5e-4
+GAIN = 1e18             # scale both input and target before loss
+SEED = 123
+
+# Checkpointing (Drive)
+CHECKPOINT_DIR = "/content/drive/MyDrive/gw_runs/denoise_run"  # <-- change if you want
+os.makedirs(CHECKPOINT_DIR, exist_ok=True)
+BEST_PATH = os.path.join(CHECKPOINT_DIR, "best.pt")
+LAST_PATH = os.path.join(CHECKPOINT_DIR, "last.pt")
+EPOCH_PATH = lambda ep: os.path.join(CHECKPOINT_DIR, f"epoch_{ep:03d}.pt")
+
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+torch.backends.cudnn.benchmark = True
+rng = np.random.default_rng(SEED)
+
+# ----------------------------- HELPERS ---------------------------------
+def bandpass_zero_phase(x, fs, lo=BAND_LO, hi=BAND_HI, order=6):
+    sos = butter(order, [lo, hi], btype='band', fs=fs, output='sos')
+    return sosfiltfilt(sos, x).astype(np.float32)
+
+def bp_and_resample(x, fs_in=FS_RAW, fs_out=FS, lo=BAND_LO, hi=BAND_HI, order=6):
+    y = bandpass_zero_phase(x, fs_in, lo, hi, order)
+    if fs_in == fs_out: return y
+    g = np.gcd(int(fs_in), int(fs_out))
+    up, down = fs_out//g, fs_in//g
+    return resample_poly(y, up, down).astype(np.float32)
+
+def edge_taper(N, fs=FS, ramp_s=EDGE_TAPER_S):
+    ramp = max(1, int(round(ramp_s*fs)))
+    if 2*ramp >= N:
+        from scipy.signal.windows import tukey
+        return tukey(N, 1.0).astype(np.float32)
+    w = np.ones(N, np.float32)
+    n = np.arange(ramp)
+    left = 0.5*(1 - np.cos(np.pi*(n+1)/ramp))
+    w[:ramp] = left; w[-ramp:] = left[::-1]
+    return w
+
+def cropped_mse(yhat, y, fs=FS, crop_s=CROP_S):
+    c = int(crop_s * fs)
+    if c <= 0: return F.mse_loss(yhat, y)
+    return F.mse_loss(yhat[..., c:-c], y[..., c:-c])
+
+# ---------- SNR schedule: STRICT monotonic 0.005 -> 0.001 by epoch 50 ----------
+def snr_schedule(epoch, total=EPOCHS):
+    # linear decay in log space for smoothness, then hold
+    end_decay = 50
+    start, end = 0.005, 0.001
+    if epoch >= end_decay:
+        base = end
+    else:
+        frac = epoch / max(1, end_decay)
+        base = start * (end/start) ** frac  # exponential decay
+    return float(base)  # no jitter; strictly non-increasing
+
+# ----------------- PRECOMPUTE CLEAN TARGETS (if missing) ----------------
+need_build = 'chirps_bp' not in globals()
+if need_build:
+    print(f"Precomputing clean bandpassed chirps @ {FS} Hz for {len(bank)} chirps...")
+    chirps_bp = []
+    for i in tqdm(range(len(bank)), desc="BP chirps", unit="chirp"):
+        chirps_bp.append(bp_and_resample(bank[i], fs_in=FS_RAW, fs_out=FS))
+    chirps_bp = np.stack(chirps_bp).astype(np.float32)
+    print("Done:", chirps_bp.shape)
+else:
+    assert chirps_bp.shape[1] == int(4.0*FS), "chirps_bp length mismatch"
+    print("Using existing chirps_bp:", chirps_bp.shape)
+
+# ---------------------------- DATASET/LOADER ----------------------------
+class DenoiseDataset(Dataset):
+    def __init__(self, bank_raw, noise_raw, ybp_clean, seed=SEED):
+        self.bank_raw  = bank_raw.astype(np.float32)   # 16384 @ 4096 Hz
+        self.noise_raw = noise_raw.astype(np.float32)  # 16384 @ 4096 Hz
+        self.ybp_clean = ybp_clean.astype(np.float32)  # 8192  @ 2048 Hz
+        self.rng = np.random.default_rng(seed)
+    def __len__(self): return len(self.bank_raw)
+    def __getitem__(self, idx):
+        y_raw = self.bank_raw[idx]
+        j     = self.rng.integers(0, len(self.noise_raw))
+        n_raw = self.noise_raw[j]
+        ybp   = self.ybp_clean[idx]
+        return y_raw, n_raw, ybp, idx
+
+# FS-domain mixing so the SNR the net sees matches the schedule; scale both signals together
+def collate_denoise(batch):
+    xs, ys = [], []
+    fs = FS
+    c = int(CROP_S * fs)  # center crop width (samples)
+    for (y_raw, n_raw, ybp_clean, _idx) in batch:
+        # BP+resample raw chirp and raw noise to FS
+        y_bp = bp_and_resample(y_raw, fs_in=FS_RAW, fs_out=fs)
+        n_bp = bp_and_resample(n_raw, fs_in=FS_RAW, fs_out=fs)
+
+        # Active region from clean target (>=10% of max), ignore edges for stability
+        if np.max(np.abs(y_bp)) > 0:
+            m = (np.abs(y_bp) >= 0.10 * np.max(np.abs(y_bp)))
+        else:
+            m = np.ones_like(y_bp, dtype=bool)
+        if c > 0:
+            m[:c] = False; m[-c:] = False
+
+        # alpha at FS to hit current SNR
+        eps = 1e-24
+        n_pow = float(np.sum((n_bp[m])**2) + eps)
+        s_pow = float(np.sum((y_bp[m])**2) + eps)
+        alpha = np.sqrt((current_snr[0]**2 * n_pow) / s_pow) if s_pow > 0 else 0.0
+
+        # Mix at FS; taper input only
+        x = n_bp + alpha * y_bp
+        x *= edge_taper(len(x), fs=fs, ramp_s=EDGE_TAPER_S)
+
+        # Target is scaled clean (matches signal component in x)
+        y = alpha * y_bp
+
+        # Global gain, normalize both by target center RMS so scales match
+        x = x * GAIN; y = y * GAIN
+        y_center = y[c:-c] if c>0 else y
+        rms_y = float(np.sqrt(np.mean(y_center**2)) + 1e-12)
+        x /= rms_y; y /= rms_y
+
+        # optional: zero-center input
+        x -= np.mean(x)
+
+        xs.append(x); ys.append(y)
+
+    x  = torch.from_numpy(np.stack(xs)[:,None,:]).float()  # [B,1,T]
+    y  = torch.from_numpy(np.stack(ys)).float()             # [B,T]
+    return x, y
+
+# Split by slicing (different RNGs) to avoid leakage
+n_train = int(0.9*len(bank))
+train_ds = DenoiseDataset(bank[:n_train], noise_pool, chirps_bp[:n_train], seed=123)
+val_ds   = DenoiseDataset(bank[n_train:], noise_pool, chirps_bp[n_train:], seed=456)
+
+train_loader = DataLoader(train_ds, batch_size=BATCH, shuffle=True,  collate_fn=collate_denoise,
+                          num_workers=4, pin_memory=True, drop_last=True)
+val_loader   = DataLoader(val_ds,   batch_size=BATCH, shuffle=False, collate_fn=collate_denoise,
+                          num_workers=4, pin_memory=True, drop_last=False)
+print(f"Dataloaders ready: {len(train_ds)} train | {len(val_ds)} val")
+
+# ------------------------------- MODEL ---------------------------------
+class DoubleConv(nn.Module):
+    def __init__(self, c_in, c_out, k=7):
+        super().__init__()
+        p = k//2
+        self.net = nn.Sequential(
+            nn.ReflectionPad1d(p), nn.Conv1d(c_in,  c_out, k, padding=0), nn.GELU(),
+            nn.ReflectionPad1d(p), nn.Conv1d(c_out, c_out, k, padding=0), nn.GELU(),
+        )
+    def forward(self, x): return self.net(x)
+
+class Down(nn.Module):
+    def __init__(self, c_in, c_out):
+        super().__init__()
+        self.pool = nn.AvgPool1d(2); self.conv = DoubleConv(c_in, c_out)
+    def forward(self, x): return self.conv(self.pool(x))
+
+class Up(nn.Module):
+    def __init__(self, c_in, c_out):
+        super().__init__()
+        self.up = nn.Upsample(scale_factor=2, mode="linear", align_corners=False)
+        self.conv = DoubleConv(c_in, c_out)
+    def forward(self, x, skip):
+        x = self.up(x)
+        if x.size(-1) != skip.size(-1):
+            x = F.pad(x, (0, skip.size(-1) - x.size(-1)))
+        return self.conv(torch.cat([skip, x], dim=1))
+
+class UNet1D_Denoise(nn.Module):
+    def __init__(self, base=32):
+        super().__init__()
+        self.inc = DoubleConv(1, base)          # 1->32
+        self.d1  = Down(base, base*2)           # 32->64
+        self.d2  = Down(base*2, base*4)         # 64->128
+        self.d3  = Down(base*4, base*8)         # 128->256
+        self.b   = DoubleConv(base*8, base*8)   # 256
+        self.u3  = Up(base*8 + base*4, base*4)  # 256+128 -> 128
+        self.u2  = Up(base*4 + base*2, base*2)  # 128+64  -> 64
+        self.u1  = Up(base*2 + base,   base)    # 64+32   -> 32
+        self.out = nn.Conv1d(base, 1, 1)        # denoised waveform
+    def forward(self, x):
+        x1 = self.inc(x); x2 = self.d1(x1); x3 = self.d2(x2); x4 = self.d3(x3)
+        xb = self.b(x4)
+        x  = self.u3(xb, x3); x = self.u2(x, x2); x = self.u1(x, x1)
+        return self.out(x).squeeze(1)           # [B,T]
+
+model = UNet1D_Denoise(base=32).to(DEVICE)
+opt = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=1e-4)
+scaler = torch.amp.GradScaler('cuda', enabled=(DEVICE == "cuda"))
+
+# ------------------------------- TRAIN ---------------------------------
+best_val = float('inf')
+current_snr = [0.005]  # will be updated each epoch
+
+# resume support
+start_epoch = 0
+if os.path.exists(LAST_PATH):
+    try:
+        ckpt = torch.load(LAST_PATH, map_location=DEVICE)
+        model.load_state_dict(ckpt["model"])
+        opt.load_state_dict(ckpt["opt"])
+        start_epoch = ckpt.get("epoch", -1) + 1
+        print(f"Resumed from {LAST_PATH} @ epoch {start_epoch}")
+    except Exception as e:
+        print("Resume failed (starting fresh):", e)
+
+def qa_plot(x, y, yhat, fs=FS, epoch=0):
+    i = 0
+    t = np.arange(y.shape[-1]) / fs
+    with torch.no_grad():
+        xin  = x[i,0].detach().cpu().numpy()
+        ytar = y[i].detach().cpu().numpy()
+        ypr  = yhat[i].detach().cpu().numpy()
+
+    plt.figure(figsize=(10,3))
+    plt.title(f"Epoch {epoch} | Model input (BP+tapered, scaled)")
+    plt.plot(t, xin)
+    plt.tight_layout()
+    plt.show()
+
+    plt.figure(figsize=(10,3))
+    plt.title("Denoise: target y_bp (scaled) vs prediction ŷ")
+    plt.plot(t, ytar, label="y_bp (scaled)")
+    plt.plot(t, ypr,  label="ŷ", alpha=0.8)
+    c = int(CROP_S * fs)
+    if c > 0:
+        plt.axvspan(0, c/fs, color='k', alpha=0.06)
+        plt.axvspan((len(t)-c)/fs, len(t)/fs, color='k', alpha=0.06)
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+
+for epoch in range(start_epoch, EPOCHS):
+    model.train()
+    current_snr[0] = snr_schedule(epoch, total=EPOCHS)
+    run, seen = 0.0, 0
+
+    for x, y in train_loader:
+        x=x.to(DEVICE); y=y.to(DEVICE)
+        with torch.amp.autocast('cuda', enabled=(DEVICE=="cuda")):
+            yhat = model(x)
+            loss = cropped_mse(yhat, y, fs=FS, crop_s=CROP_S)
+        opt.zero_grad(set_to_none=True)
+        scaler.scale(loss).backward()
+        scaler.step(opt); scaler.update()
+        run += loss.item()*x.size(0); seen += x.size(0)
+
+    # validation
+    model.eval(); tot, n = 0.0, 0
+    with torch.no_grad():
+        for x, y in val_loader:
+            x=x.to(DEVICE); y=y.to(DEVICE)
+            yhat = model(x)
+            l = cropped_mse(yhat, y, fs=FS, crop_s=CROP_S)
+            tot += l.item()*x.size(0); n += x.size(0)
+    val_loss = tot/max(1,n)
+    print(f"Epoch {epoch:03d} | SNR {current_snr[0]:.4f} | train {run/max(1,seen):.3e} | val {val_loss:.3e}")
+
+    # save per-epoch checkpoint
+    torch.save({
+        "model": model.state_dict(),
+        "opt": opt.state_dict(),
+        "epoch": epoch,
+        "cfg": {"FS":FS, "BAND":[BAND_LO,BAND_HI], "EDGE_TAPER_S":EDGE_TAPER_S, "GAIN": GAIN}
+    }, EPOCH_PATH(epoch))
+
+    # save "last" (resume point)
+    torch.save({
+        "model": model.state_dict(),
+        "opt": opt.state_dict(),
+        "epoch": epoch,
+        "cfg": {"FS":FS, "BAND":[BAND_LO,BAND_HI], "EDGE_TAPER_S":EDGE_TAPER_S, "GAIN": GAIN}
+    }, LAST_PATH)
+
+    # track best
+    if val_loss < best_val and np.isfinite(val_loss):
+        best_val = val_loss
+        torch.save({
+            "model": model.state_dict(),
+            "opt": opt.state_dict(),
+            "epoch": epoch,
+            "cfg": {"FS":FS, "BAND":[BAND_LO,BAND_HI], "EDGE_TAPER_S":EDGE_TAPER_S, "GAIN": GAIN}
+        }, BEST_PATH)
+        print(f"  ↳ saved best to {BEST_PATH} (val {best_val:.3e})")
+
+    # occasional QA
+    if epoch < 3 or (epoch % 5 == 0):
+        with torch.no_grad():
+            x, y = next(iter(val_loader))
+            x=x.to(DEVICE); y=y.to(DEVICE)
+            yhat = model(x)
+        rms_in  = x.std(dim=-1).mean().item()
+        rms_tgt = y.std(dim=-1).mean().item()
+        print(f"[QA] mean RMS input~{rms_in:.3f}, target~{rms_tgt:.3f} (should be similar)")
+        qa_plot(x, y, yhat, fs=FS, epoch=epoch)
+
