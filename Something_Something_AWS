@@ -1,0 +1,495 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+AWS-ready GW denoising trainer (1D U-Net) — physical-unit injections, O4 noise
+
+Changes from Colab PoC:
+- On-the-fly chirp synthesis (no huge bank files). Target: ~800k unique chirps across training.
+- Physical amplitudes (distance/orientation); no SNR normalization. Optional short warmup amp.
+- Includes 200k "blank" noise-only samples per million to prevent hallucinated chirps.
+- O4 (or any GPS range) noise cache builder for H1/L1 with metadata (detector, gps, fs).
+- Edge-weighted loss (no free edges), same 20–300 Hz band, 4 s @ 2048 Hz.
+
+Dependencies: pip install torch gwpy pycbc numpy scipy matplotlib tqdm
+Example (noise cache + train single-GPU):
+  python gw_denoise_aws.py --workdir /mnt/checkpoints \
+      --build-noise --noise-path /mnt/data/o4_noise.npz \
+      --noise-min-gps 1360000000 --noise-max-gps 1380000000 \
+      --noise-windows 20000 --detectors H1 L1 \
+      --epochs 60 --train-samples 1000000 --val-samples 10000
+"""
+
+import os, math, time, argparse, random
+import numpy as np
+from dataclasses import dataclass
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.utils.data import Dataset, DataLoader
+
+from gwpy.timeseries import TimeSeries
+from pycbc.waveform import get_td_waveform
+from pycbc.detector import Detector
+
+from scipy.signal import butter, sosfiltfilt, resample_poly
+from scipy.signal.windows import tukey
+from tqdm.auto import tqdm
+
+# --------------------------- Config Defaults ---------------------------
+FS_TRAIN = 2048               # Hz (training sample rate)
+SEG_S = 4.0                   # seconds
+T_LEN = int(FS_TRAIN * SEG_S)
+BAND_LO, BAND_HI = 20.0, 300.0
+EDGE_TAPER_S = 0.40           # seconds tapered on input only
+GAIN = 1e21                   # scale inputs/targets (keep physical ratios)
+CROP_S = 0.0                  # we've moved to edge-weighting; keep 0 crop by default
+EDGE_FLOOR = 0.2              # min loss weight at edges (avoid free noise)
+
+# Parameter ranges (can be overridden via CLI)
+M1_RANGE = (10.0, 80.0)       # solar masses
+M2_RANGE = (10.0, 80.0)
+DIST_MPC = (100.0, 2000.0)    # log-uniform distance range
+F_LOWER = 20.0
+SPINZ_RANGE = (-0.98, 0.98)
+
+# Warmup amplitude: >1.0 for first few epochs, then 1.0
+WARMUP_EPOCHS = 5
+WARMUP_MAX = 2.0
+
+# --------------------------- DSP Helpers -------------------------------
+
+def bandpass_zero_phase(x: np.ndarray, fs: float, lo=BAND_LO, hi=BAND_HI, order=6) -> np.ndarray:
+    sos = butter(order, [lo, hi], btype='band', fs=fs, output='sos')
+    return sosfiltfilt(sos, x).astype(np.float32)
+
+
+def bp_and_resample(x: np.ndarray, fs_in: float, fs_out: float) -> np.ndarray:
+    y = bandpass_zero_phase(x, fs_in, BAND_LO, BAND_HI, 6)
+    if int(fs_in) == int(fs_out):
+        return y
+    g = math.gcd(int(fs_in), int(fs_out))
+    up, down = fs_out // g, fs_in // g
+    return resample_poly(y, up, down).astype(np.float32)
+
+
+def edge_taper(n: int, fs: float, ramp_s: float = EDGE_TAPER_S) -> np.ndarray:
+    ramp = max(1, int(round(ramp_s * fs)))
+    if 2 * ramp >= n:
+        return tukey(n, 1.0).astype(np.float32)
+    w = np.ones(n, np.float32)
+    nidx = np.arange(ramp)
+    left = 0.5 * (1 - np.cos(np.pi * (nidx + 1) / ramp))
+    w[:ramp] = left
+    w[-ramp:] = left[::-1]
+    return w
+
+
+def weighted_mse(yhat: torch.Tensor, y: torch.Tensor, fs: float, edge_s: float = EDGE_TAPER_S, floor: float = EDGE_FLOOR) -> torch.Tensor:
+    T = y.shape[-1]
+    ramp = int(edge_s * fs)
+    w = torch.ones(T, device=y.device)
+    if ramp > 0 and 2 * ramp < T:
+        ramp_w = torch.linspace(floor, 1.0, ramp, device=y.device)
+        w[:ramp] = ramp_w
+        w[-ramp:] = ramp_w.flip(0)
+    return ((yhat - y) ** 2 * w).mean()
+
+# ----------------------- Noise Cache (O4 or any) -----------------------
+
+def build_noise_cache(path: str, detectors: list[str], gps_min: int, gps_max: int, windows: int = 20000, chunk_len: int = 600, seg_s: float = SEG_S) -> None:
+    """Fetch random chunks within [gps_min, gps_max] and slice into 4 s windows.
+    Saves .npz with arrays: noise [N, raw_len], det [N], gps [N], fs_raw [scalar].
+    """
+    if os.path.exists(path):
+        print(f"[noise] {path} already exists; skipping build.")
+        return
+
+    rng = np.random.default_rng(123)
+    records = []
+
+    # Detect fs_raw using a tiny pull near gps_min
+    probe = TimeSeries.fetch_open_data(detectors[0], gps_min, gps_min + 4)
+    fs_raw = float(probe.sample_rate.value)
+    raw_len = int(fs_raw * seg_s)
+
+    total = 0
+    with tqdm(total=windows, desc="build_noise", unit="win") as pbar:
+        while total < windows:
+            for det in detectors:
+                if total >= windows:
+                    break
+                gps_start = rng.integers(gps_min, gps_max - chunk_len)
+                try:
+                    ts = TimeSeries.fetch_open_data(det, int(gps_start), int(gps_start + chunk_len))
+                    data = ts.value.astype(np.float32)
+                    # slice into 4 s non-overlapping windows
+                    samples_per_win = raw_len
+                    usable = (len(data) // samples_per_win) * samples_per_win
+                    if usable == 0:
+                        continue
+                    chunk = data[:usable].reshape(-1, samples_per_win)
+                    gps_starts = np.arange(int(gps_start), int(gps_start) + int(usable / fs_raw), int(seg_s))
+                    for i in range(chunk.shape[0]):
+                        records.append((chunk[i], det, float(gps_starts[i])))
+                    total += chunk.shape[0]
+                    pbar.update(chunk.shape[0])
+                except Exception as e:
+                    print(f"[noise] {det} fetch error: {e}")
+                if total >= windows:
+                    break
+
+    noise = np.stack([r[0] for r in records]).astype(np.float32)
+    det = np.array([r[1] for r in records])
+    gps = np.array([r[2] for r in records], dtype=np.float64)
+
+    np.savez_compressed(path, noise=noise, det=det, gps=gps, fs_raw=np.array([fs_raw], dtype=np.float32))
+    print(f"[noise] saved {noise.shape} fs_raw={fs_raw} to {path}")
+
+
+@dataclass
+class NoisePool:
+    noise: np.ndarray   # [N, raw_len]
+    det: np.ndarray     # [N] 'H1'/'L1'
+    gps: np.ndarray     # [N] float gps start times
+    fs_raw: float
+
+    @classmethod
+    def load(cls, path: str) -> "NoisePool":
+        z = np.load(path, allow_pickle=False)
+        return cls(noise=z['noise'], det=z['det'], gps=z['gps'], fs_raw=float(z['fs_raw'][0]))
+
+# ---------------------- On-the-fly Chirp Generator ---------------------
+
+def sample_params():
+    m1 = np.random.uniform(*M1_RANGE)
+    m2 = np.random.uniform(*M2_RANGE)
+    if m2 > m1:
+        m1, m2 = m2, m1
+    # log-uniform distance
+    dmin, dmax = DIST_MPC
+    dist = float(np.exp(np.random.uniform(np.log(dmin), np.log(dmax))))
+    spin1z = float(np.random.uniform(*SPINZ_RANGE))
+    spin2z = float(np.random.uniform(*SPINZ_RANGE))
+    incl = float(np.arccos(np.random.uniform(-1.0, 1.0)))  # cos i ~ U[-1,1]
+    return m1, m2, dist, spin1z, spin2z, incl
+
+
+def make_waveform(fs: float, m1, m2, dist_mpc, spin1z, spin2z, incl, f_lower=F_LOWER):
+    hp, hc = get_td_waveform(approximant="IMRPhenomD", mass1=m1, mass2=m2,
+                             delta_t=1.0/fs, distance=dist_mpc, f_lower=f_lower,
+                             spin1z=spin1z, spin2z=spin2z, inclination=incl)
+    hp = np.asarray(hp.data, dtype=np.float32)
+    hc = np.asarray(hc.data, dtype=np.float32)
+    return hp, hc
+
+
+def antenna_factors(detector: str, ra: float, dec: float, pol: float, t_gps: float):
+    d = Detector(detector)
+    Fp, Fx = d.antenna_pattern(ra, dec, pol, t_gps)
+    return float(Fp), float(Fx)
+
+
+def place_merger(sig: np.ndarray, fs: float, target_idx: int, total_len: int) -> np.ndarray:
+    """Center a waveform around its max |.| at target_idx within a fixed-length buffer."""
+    out = np.zeros(total_len, dtype=np.float32)
+    if len(sig) == 0:
+        return out
+    peak = int(np.argmax(np.abs(sig)))
+    start_sig = peak - min(peak, target_idx)
+    end_sig = start_sig + min(len(sig), total_len)
+
+    # compute copy ranges
+    dst_start = max(0, target_idx - peak)
+    dst_end = min(total_len, dst_start + (end_sig - start_sig))
+    src_start = max(0, start_sig)
+    src_end = src_start + (dst_end - dst_start)
+    if dst_end > dst_start and src_end > src_start:
+        out[dst_start:dst_end] = sig[src_start:src_end]
+    return out
+
+
+# ----------------------------- Dataset ---------------------------------
+class GWOnTheFly(Dataset):
+    def __init__(self, noise_pool: NoisePool, samples: int, blank_frac: float = 0.2, seed: int = 123):
+        self.noise = noise_pool.noise
+        self.det = noise_pool.det
+        self.gps = noise_pool.gps
+        self.fs_raw = noise_pool.fs_raw
+        self.samples = samples
+        self.blank_frac = blank_frac
+        self.rng = np.random.default_rng(seed)
+
+        # prepare up/down sampling factors for raw->train
+        g = math.gcd(int(self.fs_raw), int(FS_TRAIN))
+        self.up = FS_TRAIN // g
+        self.down = int(self.fs_raw) // g
+
+        self.taper = edge_taper(T_LEN, FS_TRAIN, EDGE_TAPER_S)
+
+    def __len__(self):
+        return self.samples
+
+    def __getitem__(self, idx):
+        # choose a noise window
+        j = int(self.rng.integers(0, len(self.noise)))
+        n_raw = self.noise[j]
+        det = str(self.det[j])
+        gps0 = float(self.gps[j])
+
+        # resample + BP noise to training fs
+        n_bp = bp_and_resample(n_raw, fs_in=self.fs_raw, fs_out=FS_TRAIN)
+
+        # decide blank vs chirp
+        make_blank = (self.rng.random() < self.blank_frac)
+        y = np.zeros(T_LEN, dtype=np.float32)
+
+        if not make_blank:
+            # random sky location / polarization for antenna pattern
+            ra = float(self.rng.uniform(0, 2 * np.pi))
+            dec = float(np.arcsin(self.rng.uniform(-1.0, 1.0)))  # sin(dec) ~ U[-1,1]
+            pol = float(self.rng.uniform(0, 2 * np.pi))
+            t_gps = gps0 + float(self.rng.uniform(0.0, SEG_S))
+            Fp, Fx = antenna_factors(det, ra, dec, pol, t_gps)
+
+            # sample waveform params
+            m1, m2, dist, s1z, s2z, incl = sample_params()
+            hp, hc = make_waveform(FS_TRAIN, m1, m2, dist, s1z, s2z, incl)
+            # project to detector
+            h = Fp * hp + Fx * hc
+            # band-limit (match noise path)
+            h = bandpass_zero_phase(h, FS_TRAIN, BAND_LO, BAND_HI, 6)
+            # place merger at target index (2.0–3.5 s)
+            target_idx = int(self.rng.integers(int(2.0 * FS_TRAIN), int(3.5 * FS_TRAIN)))
+            y = place_merger(h, FS_TRAIN, target_idx, T_LEN)
+
+        # input = noise + (amp_warmup applied in collate)
+        x = n_bp.copy()
+        x *= self.taper  # taper input only
+        return x.astype(np.float32), y.astype(np.float32)
+
+
+# ------------------------------- Model ---------------------------------
+class DoubleConv(nn.Module):
+    def __init__(self, c_in, c_out, k=7):
+        super().__init__()
+        p = k // 2
+        self.net = nn.Sequential(
+            nn.ReflectionPad1d(p), nn.Conv1d(c_in, c_out, k, padding=0), nn.GELU(),
+            nn.ReflectionPad1d(p), nn.Conv1d(c_out, c_out, k, padding=0), nn.GELU(),
+        )
+    def forward(self, x):
+        return self.net(x)
+
+
+class Down(nn.Module):
+    def __init__(self, c_in, c_out):
+        super().__init__()
+        self.pool = nn.AvgPool1d(2)
+        self.conv = DoubleConv(c_in, c_out)
+    def forward(self, x):
+        return self.conv(self.pool(x))
+
+
+class Up(nn.Module):
+    def __init__(self, c_in, c_out):
+        super().__init__()
+        self.up = nn.Upsample(scale_factor=2, mode="linear", align_corners=False)
+        self.conv = DoubleConv(c_in, c_out)
+    def forward(self, x, skip):
+        x = self.up(x)
+        if x.size(-1) != skip.size(-1):
+            x = F.pad(x, (0, skip.size(-1) - x.size(-1)))
+        return self.conv(torch.cat([skip, x], dim=1))
+
+
+class UNet1D_Denoise(nn.Module):
+    def __init__(self, base=32):
+        super().__init__()
+        self.inc = DoubleConv(1, base)
+        self.d1 = Down(base, base * 2)
+        self.d2 = Down(base * 2, base * 4)
+        self.d3 = Down(base * 4, base * 8)
+        self.b = DoubleConv(base * 8, base * 8)
+        self.u3 = Up(base * 8 + base * 4, base * 4)
+        self.u2 = Up(base * 4 + base * 2, base * 2)
+        self.u1 = Up(base * 2 + base, base)
+        self.out = nn.Conv1d(base, 1, 1)
+    def forward(self, x):
+        x1 = self.inc(x)
+        x2 = self.d1(x1)
+        x3 = self.d2(x2)
+        x4 = self.d3(x3)
+        xb = self.b(x4)
+        x = self.u3(xb, x3)
+        x = self.u2(x, x2)
+        x = self.u1(x, x1)
+        return self.out(x).squeeze(1)
+
+
+# ----------------------------- Collate ----------------------------------
+class Collate:
+    def __init__(self, amp_warmup_epochs=WARMUP_EPOCHS, amp_max=WARMUP_MAX, fs=FS_TRAIN):
+        self.amp_warmup_epochs = amp_warmup_epochs
+        self.amp_max = amp_max
+        self.fs = fs
+        self.epoch = 0
+
+    def set_epoch(self, e: int):
+        self.epoch = e
+
+    def amp_factor(self):
+        if self.epoch >= self.amp_warmup_epochs:
+            return 1.0
+        # cosine decay from amp_max -> 1.0 over warmup epochs
+        frac = self.epoch / max(1, self.amp_warmup_epochs)
+        return 1.0 + (self.amp_max - 1.0) * 0.5 * (1 + np.cos(np.pi * frac))
+
+    def __call__(self, batch):
+        xs, ys = [], []
+        amp = float(self.amp_factor())
+        for x, y in batch:
+            # input: noise + (amp * signal), taper already applied on noise; keep target scaled equally
+            x_out = (x + amp * y) * GAIN
+            y_out = (amp * y) * GAIN
+            # optional zero-center input only
+            x_out = x_out - float(np.mean(x_out))
+            xs.append(x_out)
+            ys.append(y_out)
+        x_t = torch.from_numpy(np.stack(xs)[:, None, :]).float()
+        y_t = torch.from_numpy(np.stack(ys)).float()
+        return x_t, y_t
+
+
+# ---------------------------- Train Loop --------------------------------
+
+def train(args):
+    os.makedirs(args.workdir, exist_ok=True)
+    ckpt_dir = os.path.join(args.workdir, "checkpoints")
+    os.makedirs(ckpt_dir, exist_ok=True)
+    best_path = os.path.join(ckpt_dir, "best.pt")
+    last_path = os.path.join(ckpt_dir, "last.pt")
+
+    # Build or load noise
+    if args.build_noise:
+        assert args.noise_path, "--noise-path required when --build-noise"
+        build_noise_cache(args.noise_path, args.detectors, args.noise_min_gps, args.noise_max_gps,
+                          windows=args.noise_windows, chunk_len=args.noise_chunk_len, seg_s=SEG_S)
+    assert os.path.exists(args.noise_path), f"noise file not found: {args.noise_path}"
+    pool = NoisePool.load(args.noise_path)
+
+    # Datasets & loaders
+    train_ds = GWOnTheFly(pool, samples=args.train_samples, blank_frac=args.blank_frac, seed=123)
+    val_ds = GWOnTheFly(pool, samples=args.val_samples, blank_frac=args.blank_frac, seed=456)
+
+    collate = Collate(amp_warmup_epochs=args.warmup_epochs, amp_max=args.warmup_max)
+
+    train_loader = DataLoader(train_ds, batch_size=args.batch, shuffle=True, num_workers=args.workers,
+                              pin_memory=True, drop_last=True, collate_fn=collate)
+    val_loader = DataLoader(val_ds, batch_size=args.batch, shuffle=False, num_workers=args.workers,
+                            pin_memory=True, drop_last=False, collate_fn=collate)
+
+    # Model
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model = UNet1D_Denoise(base=args.base).to(device)
+    opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
+    scaler = torch.amp.GradScaler('cuda', enabled=(device.type == 'cuda'))
+
+    start_epoch = 0
+    best_val = float('inf')
+    if args.resume and os.path.exists(last_path):
+        ck = torch.load(last_path, map_location=device)
+        model.load_state_dict(ck['model'])
+        opt.load_state_dict(ck['opt'])
+        start_epoch = ck.get('epoch', -1) + 1
+        print(f"[resume] from epoch {start_epoch}")
+
+    for epoch in range(start_epoch, args.epochs):
+        collate.set_epoch(epoch)
+        model.train()
+        run_loss, seen = 0.0, 0
+        pbar = tqdm(total=len(train_loader), desc=f"train e{epoch}", leave=False)
+        for (xb, yb) in train_loader:
+            xb = xb.to(device)
+            yb = yb.to(device)
+            with torch.amp.autocast('cuda', enabled=(device.type == 'cuda')):
+                yhat = model(xb)
+                loss = weighted_mse(yhat, yb, FS_TRAIN, EDGE_TAPER_S, EDGE_FLOOR)
+            opt.zero_grad(set_to_none=True)
+            scaler.scale(loss).backward()
+            scaler.step(opt); scaler.update()
+            run_loss += loss.item() * xb.size(0)
+            seen += xb.size(0)
+            pbar.update(1)
+        pbar.close()
+        train_loss = run_loss / max(1, seen)
+
+        # validation
+        model.eval()
+        tot, n = 0.0, 0
+        with torch.no_grad():
+            for (xb, yb) in val_loader:
+                xb = xb.to(device)
+                yb = yb.to(device)
+                yhat = model(xb)
+                l = weighted_mse(yhat, yb, FS_TRAIN, EDGE_TAPER_S, EDGE_FLOOR)
+                tot += l.item() * xb.size(0)
+                n += xb.size(0)
+        val_loss = tot / max(1, n)
+
+        print(f"Epoch {epoch:03d} | train {train_loss:.3e} | val {val_loss:.3e} | amp_warmup {collate.amp_factor():.3f}")
+
+        # save last/best
+        state = {
+            'model': model.state_dict(),
+            'opt': opt.state_dict(),
+            'epoch': epoch,
+            'cfg': {
+                'FS_TRAIN': FS_TRAIN, 'BAND': [BAND_LO, BAND_HI], 'EDGE_TAPER_S': EDGE_TAPER_S, 'GAIN': GAIN,
+                'EDGE_FLOOR': EDGE_FLOOR
+            }
+        }
+        torch.save(state, last_path)
+        if np.isfinite(val_loss) and val_loss < best_val:
+            best_val = val_loss
+            torch.save(state, best_path)
+            print(f"  ↳ saved best to {best_path} (val {best_val:.3e})")
+
+
+# ------------------------------ CLI ------------------------------------
+
+def parse_args():
+    ap = argparse.ArgumentParser(description="GW denoising trainer (AWS-ready)")
+    ap.add_argument('--workdir', type=str, required=True, help='Output/checkpoint directory')
+
+    # Noise cache
+    ap.add_argument('--build-noise', action='store_true', help='Build noise cache from open data')
+    ap.add_argument('--noise-path', type=str, required=True, help='Path to .npz noise cache')
+    ap.add_argument('--noise-min-gps', type=int, default=1360000000, help='Min GPS for noise pulls (O4 example)')
+    ap.add_argument('--noise-max-gps', type=int, default=1380000000, help='Max GPS for noise pulls (O4 example)')
+    ap.add_argument('--detectors', type=str, nargs='+', default=['H1','L1'], help='Detectors to use')
+    ap.add_argument('--noise-windows', type=int, default=20000, help='Number of 4s windows to cache')
+    ap.add_argument('--noise-chunk-len', type=int, default=600, help='Chunk length (s) per fetch')
+
+    # Training data & schedule
+    ap.add_argument('--train-samples', type=int, default=1000000, help='Samples per epoch (e.g., 800k chirps + 200k blanks)')
+    ap.add_argument('--val-samples', type=int, default=10000, help='Validation samples per epoch')
+    ap.add_argument('--blank-frac', type=float, default=0.2, help='Fraction of blanks (noise-only)')
+    ap.add_argument('--warmup-epochs', type=int, default=WARMUP_EPOCHS, help='Epochs to keep amp>1')
+    ap.add_argument('--warmup-max', type=float, default=WARMUP_MAX, help='Peak amp factor at epoch 0')
+
+    # Optim & model
+    ap.add_argument('--epochs', type=int, default=60)
+    ap.add_argument('--batch', type=int, default=32)
+    ap.add_argument('--workers', type=int, default=4)
+    ap.add_argument('--lr', type=float, default=5e-4)
+    ap.add_argument('--base', type=int, default=32, help='UNet base channels')
+    ap.add_argument('--resume', action='store_true', help='Resume from last.pt if present')
+    return ap.parse_args()
+
+
+if __name__ == '__main__':
+    args = parse_args()
+    torch.backends.cudnn.benchmark = True
+    np.random.seed(42); random.seed(42); torch.manual_seed(42)
+    train(args)
