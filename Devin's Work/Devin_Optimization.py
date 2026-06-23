@@ -10,6 +10,7 @@ Date: 2025-07-14
 
 import time
 import numpy as np
+import cupy as cp 
 
 # Constants (SI units unless noted otherwise)
 NUMBER_DETECTORS = 2
@@ -413,8 +414,7 @@ def generate_network_time_array(signal_lifetime, detector_sampling_rate, maximum
     half_samples = int(np.ceil(T_max * detector_sampling_rate))
 
     # Generate symmetric time array around zero
-    time_array = np.arange(-half_samples, half_samples) / detector_sampling_rate
-
+    time_array = cp.arange(-half_samples, half_samples) / detector_sampling_rate
     return time_array
 
 #=========================================================================
@@ -463,7 +463,7 @@ def generate_oscillatory_terms(signal_lifetime, signal_frequency, time_array, ti
     B_cross = envelope * np.sin(phase)
 
     # Stack into (N,4) for the four modes [A₊, Bₓ, A₊, Bₓ]
-    oscillatory_terms = np.column_stack([A_plus, B_cross, A_plus, B_cross])
+    oscillatory_terms = cp.column_stack([A_plus, B_cross, A_plus, B_cross])
 
     return oscillatory_terms
 
@@ -496,7 +496,7 @@ def generate_model_angles_array(number_angular_samples) :
     # Right ascension & polarization: uniform in [0, 2π)
     ra_psi = np.random.rand(number_angular_samples, 2) * 2 * np.pi
     # Stack into shape (N, 3)
-    angle_grid = np.column_stack((dec, ra_psi))
+    angle_grid = cp.column_stack((dec, ra_psi))
     return angle_grid
 
 #=========================================================================
@@ -516,7 +516,7 @@ def generate_model_amplitudes_array(number_amplitude_combinations, gw_max_amps) 
                     where each row is a random amplitude vector [A_+, B_x, A_+, B_x],
                     with each component sampled uniformly from [0, gw_max_amps).
     """
-    return np.random.rand(number_amplitude_combinations, NUMBER_GW_MODES) * gw_max_amps
+    return cp.random.rand(number_amplitude_combinations, NUMBER_GW_MODES) * gw_max_amps
 
 
 #=========================================================================
@@ -581,7 +581,7 @@ def generate_model_detector_responses(
     angle_grid = generate_model_angles_array(n_ang)                     # shape (n_ang, 3)
 
     # Initialize output array: detectors=2 (0=H1, 1=L1)
-    responses = np.empty((n_ang, n_amp, n_times, 2))
+    responses = cp.empty((n_ang, n_amp, n_times, 2))
 
     # Loop over angle sets
     for i_ang, angles in enumerate(angle_grid):
@@ -609,11 +609,10 @@ def generate_model_detector_responses(
         weighted_H @ amplitude_grid.T → (n_samples, n_amplitudes)
         # computes all (weighted_H @ amps) at once instead of looping
         '''
-        H_all = weighted_H @ amplitude_grid.T      
-        L_all = weighted_L @ amplitude_grid.T
-        responses[i_ang, :, :, 0] = H_all.T
-        responses[i_ang, :, :, 1] = L_all.T
-    
+        responses[i_ang, :, :, 0] = (weighted_H @ amplitude_grid.T).T
+        cp.cuda.Stream.null.synchronize()
+        responses[i_ang, :, :, 1] = (weighted_L @ amplitude_grid.T).T
+        cp.cuda.Stream.null.synchronize()
     return responses, angle_grid
 
 
