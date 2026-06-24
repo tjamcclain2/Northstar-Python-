@@ -584,6 +584,8 @@ def generate_model_detector_responses(
     responses = cp.empty((n_ang, n_amp, n_times, 2))
 
     # Loop over angle sets
+    # TODO: Convert remaining arrays in this loop from NumPy to CuPy.
+
     for i_ang, angles in enumerate(angle_grid):
         # Beam patterns for Hanford & Livingston
         Fp_H, Fx_H = beam_pattern_response_functions(hanford_detector_angles, angles)
