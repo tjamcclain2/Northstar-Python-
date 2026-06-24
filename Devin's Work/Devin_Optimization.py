@@ -449,18 +449,18 @@ def generate_oscillatory_terms(signal_lifetime, signal_frequency, time_array, ti
     """
     
     # Gaussian Q-factor
-    Q = np.sqrt(np.log(2)) / signal_lifetime
+    Q = cp.sqrt(cp.log(2)) / signal_lifetime
 
     # Time relative to arrival at this detector
     dt = time_array - time_delay
 
     # Envelope and phase arrays
-    envelope = np.exp(-Q**2 * dt**2)
-    phase    = 2 * np.pi * signal_frequency * dt
+    envelope = cp.exp(-Q**2 * dt**2)
+    phase    = 2 * cp.pi * signal_frequency * dt
 
     # Cosine- and sine-modulated terms
-    A_plus = envelope * np.cos(phase)
-    B_cross = envelope * np.sin(phase)
+    A_plus = envelope * cp.cos(phase)
+    B_cross = envelope * cp.sin(phase)
 
     # Stack into (N,4) for the four modes [A₊, Bₓ, A₊, Bₓ]
     oscillatory_terms = cp.column_stack([A_plus, B_cross, A_plus, B_cross])
@@ -496,7 +496,7 @@ def generate_model_angles_array(number_angular_samples) :
     # Right ascension & polarization: uniform in [0, 2π)
     ra_psi = np.random.rand(number_angular_samples, 2) * 2 * np.pi
     # Stack into shape (N, 3)
-    angle_grid = cp.column_stack((dec, ra_psi))
+    angle_grid = np.column_stack((dec, ra_psi))
     return angle_grid
 
 #=========================================================================
@@ -584,24 +584,22 @@ def generate_model_detector_responses(
     responses = cp.empty((n_ang, n_amp, n_times, 2))
 
     # Loop over angle sets
-    # TODO: Convert remaining arrays in this loop from NumPy to CuPy.
-
     for i_ang, angles in enumerate(angle_grid):
         # Beam patterns for Hanford & Livingston
         Fp_H, Fx_H = beam_pattern_response_functions(hanford_detector_angles, angles)
         Fp_L, Fx_L = beam_pattern_response_functions(livingston_detector_angles, angles)
 
         # Weight Hanford oscillatory terms: shape (n_times, 4)
-        pattern_H = np.array([Fp_H, Fx_H, Fp_H, Fx_H])
-        weighted_H = hanford_terms * pattern_H[np.newaxis, :]
+        pattern_H = cp.array([Fp_H, Fx_H, Fp_H, Fx_H])
+        weighted_H = hanford_terms * pattern_H[cp.newaxis, :]
 
         # Compute Livingston oscillatory terms with its time delay
         delay_L = time_delay_hanford_to_livingston(angles)
         liv_terms = generate_oscillatory_terms(
             signal_lifetime, signal_frequency, time_array, delay_L
         )
-        pattern_L = np.array([Fp_L, Fx_L, Fp_L, Fx_L])
-        weighted_L = liv_terms * pattern_L[np.newaxis, :]
+        pattern_L = cp.array([Fp_L, Fx_L, Fp_L, Fx_L])
+        weighted_L = liv_terms * pattern_L[cp.newaxis, :]
         '''
         weighted_H.shape = (n_samples, 4)
         amplitude_grid.shape = (n_amplitudes, 4)
@@ -697,7 +695,7 @@ def generate_real_detector_responses(signal_frequency, signal_lifetime, detector
 
 
 #=========================================================================
-
+# TODO: start converting to CuPy:
 def get_best_fit_angles_deltas(real_detector_responses, real_angles_array,
                                 model_detector_responses, model_angles_array):
     """
