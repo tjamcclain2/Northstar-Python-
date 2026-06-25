@@ -11,6 +11,7 @@ Date: 2025-07-14
 import time
 import numpy as np
 import cupy as cp 
+from cupyx.profiler import benchmark
 
 # Constants (SI units unless noted otherwise)
 NUMBER_DETECTORS = 2
@@ -608,9 +609,7 @@ def generate_model_detector_responses(
         # computes all (weighted_H @ amps) at once instead of looping
         '''
         responses[i_ang, :, :, 0] = (weighted_H @ amplitude_grid.T).T
-        cp.cuda.Stream.null.synchronize()
         responses[i_ang, :, :, 1] = (weighted_L @ amplitude_grid.T).T
-        cp.cuda.Stream.null.synchronize()
     return responses, angle_grid
 
 
@@ -685,7 +684,7 @@ def generate_real_detector_responses(signal_frequency, signal_lifetime, detector
     ).copy()
 
     real_angles_array = cp.broadcast_to(
-        real_angles[cp.newaxis, :],
+        cp.asarray(real_angles)[None, :],
         (number_angular_samples, NUMBER_SOURCE_ANGLES)
     ).copy()
 
@@ -718,30 +717,37 @@ def get_best_fit_angles_deltas(real_detector_responses, real_angles_array,
         ]
     """
     # 1. Oracle best: angle delta to closest model angle
+    model_angles_array = cp.asarray(model_angles_array)
     angle_deltas = cp.abs(real_angles_array[0] - model_angles_array)
-    cp.cuda.Stream.null.synchronize()
-    summed_angle_deltas = np.sum(angle_deltas, axis=1)
-    min_angle_idx = np.argmin(summed_angle_deltas)
-    sum_real_minimum_angle_deltas = np.sum(np.abs(real_angles_array[0] - model_angles_array[min_angle_idx]))
+    summed_angle_deltas = cp.sum(angle_deltas, axis=1)
+    min_angle_idx = cp.argmin(summed_angle_deltas)
+    sum_real_minimum_angle_deltas = cp.sum(cp.abs(real_angles_array[0] - model_angles_array[min_angle_idx]))
+    
+    response_deltas = cp.abs(real_detector_responses - model_detector_responses)
+    summed_response_deltas = cp.sum(response_deltas, axis=(-1, -2))  # shape: (n_angles, n_amps)
 
     # 2. Single best fit: minimum total difference in detector responses
-    t_start = time.process_time()
-    response_deltas = np.abs(real_detector_responses - model_detector_responses)
-    summed_response_deltas = np.sum(response_deltas, axis=(-1, -2))  # shape: (n_angles, n_amps)
-    min_response_idx = np.unravel_index(np.argmin(summed_response_deltas), summed_response_deltas.shape)
-    best_fit_angles = model_angles_array[min_response_idx[0]]
-    sum_real_minimum_response_angle_deltas = np.sum(np.abs(real_angles_array[0] - best_fit_angles))
-    t_single_fit = time.process_time() - t_start
-
+    def single_best_fit():
+        min_response_idx = cp.unravel_index(cp.argmin(summed_response_deltas), summed_response_deltas.shape)
+        best_fit_angles = model_angles_array[min_response_idx[0]]
+        return cp.sum(cp.abs(real_angles_array[0] - best_fit_angles))
+   
+    sum_real_minimum_response_angle_deltas = single_best_fit()
+   
     # 3. Weighted best fit
-    t_start = time.process_time()
-    fractional_deltas = summed_response_deltas / np.min(summed_response_deltas)
-    weights = np.exp(1 - fractional_deltas**WEIGHTING_POWER)
-    summed_weights = np.sum(weights, axis=1)
-    weighted_idx = np.argmax(summed_weights)
-    weighted_angles = model_angles_array[weighted_idx]
-    sum_real_maximum_weighted_response_angle_deltas = np.sum(np.abs(real_angles_array[0] - weighted_angles))
-    t_weighted_fit = time.process_time() - t_start
+    def weighted_best_fit():
+        fractional_deltas = summed_response_deltas / cp.min(summed_response_deltas)
+        weights = cp.exp(1 - fractional_deltas**WEIGHTING_POWER)
+        summed_weights = cp.sum(weights, axis=1)
+        weighted_idx = cp.argmax(summed_weights)
+        weighted_angles = model_angles_array[weighted_idx]
+        return cp.sum(cp.abs(real_angles_array[0] - weighted_angles))
+
+    sum_real_maximum_weighted_response_angle_deltas = weighted_best_fit()
+    bench_single = benchmark(single_best_fit, (), n_repeat=50, n_warmup=10)
+    bench_weighted = benchmark(weighted_best_fit, (), n_repeat=50, n_warmup=10)
+    t_single_fit = (bench_single.gpu_times.mean())
+    t_weighted_fit = (bench_weighted.gpu_times.mean())
 
     return [
         sum_real_minimum_angle_deltas,
@@ -750,7 +756,6 @@ def get_best_fit_angles_deltas(real_detector_responses, real_angles_array,
         t_single_fit,
         t_weighted_fit
     ]
-
 
 #========================================================================= START OF DRIVER FUNCTIONS =========================================================================
 
@@ -763,8 +768,9 @@ def run_northstar_pipeline(
     number_angular_samples=100,
     number_amplitude_combinations=100
 ):
-    start_time = time.process_time()
-
+    start = cp.cuda.Event()
+    end = cp.cuda.Event()
+    start.record()
     # Generate synthetic model and noisy real detector responses
     model_responses, model_angles = generate_model_detector_responses(
         gw_frequency,
@@ -793,9 +799,9 @@ def run_northstar_pipeline(
         model_angles
     )
 
-    end_time = time.process_time()
-    total_runtime = end_time - start_time
-
+    end.record()
+    end.synchronize()
+    total_runtime = cp.cuda.get_elapsed_time(start, end)/1000
     # Create a human-readable timestamped filename
     timestamp = time.strftime("%d_%b_%Y_%H-%M-%S")
     filename = f"OPTIMIZED_northstar_output_{timestamp}.txt"
@@ -805,9 +811,9 @@ def run_northstar_pipeline(
         f"The best possible fit angle delta (in radians) was: {best_fit_data[0]:.6f}",
         f"The single best fit algorithm angle delta (in radians) was: {best_fit_data[1]:.6f}",
         f"The weighted best fit algorithm angle delta (in radians) was: {best_fit_data[2]:.6f}",
-        f"The full process run time (in seconds) was: {total_runtime:.4f}",
-        f"The single best fit algorithm run time (in seconds) was: {best_fit_data[3]:.4f}",
-        f"The weighted best fit algorithm run time (in seconds) was: {best_fit_data[4]:.4f}"
+        f"The full process run time (in seconds) was: {total_runtime:.6f}",
+        f"The single best fit algorithm run time (in seconds) was: {best_fit_data[3]:.6f}",
+        f"The weighted best fit algorithm run time (in seconds) was: {best_fit_data[4]:.6f}"
     ]
 
     # Print to terminal
@@ -816,11 +822,12 @@ def run_northstar_pipeline(
         print(line)
 
     # Write to file
+
     with open(filename, "w") as f:
         for line in results:
             f.write(line + "\n")
 
-    print(f"\n[✔] Output also written to: {filename}")
+    print(f"\n[OK] Output also written to: {filename}")
 if __name__ == "__main__":
     run_northstar_pipeline()
 
