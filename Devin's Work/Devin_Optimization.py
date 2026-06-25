@@ -602,10 +602,8 @@ def generate_model_detector_responses(
         weighted_L = liv_terms * pattern_L[cp.newaxis, :]
         '''
         weighted_H.shape = (n_samples, 4)
-        amplitude_grid.shape = (n_amplitudes, 4)
-
-        transpose amplitude_grid → (4, n_amplitudes)
-
+        amplitude_grid.shape = (n_amplitudes, 
+        transpose amplitude_grid → (4, n_amplitude
         weighted_H @ amplitude_grid.T → (n_samples, n_amplitudes)
         # computes all (weighted_H @ amps) at once instead of looping
         '''
@@ -633,7 +631,7 @@ def generate_noise_array(max_noise_amp,number_time_samples) :
                     uniformly distributed random noise values in the range [0, max_noise_amp).
     """
     
-    noise_array = np.random.rand(number_time_samples)*max_noise_amp
+    noise_array = cp.random.rand(number_time_samples)*max_noise_amp
     return noise_array
 
 #=========================================================================
@@ -671,23 +669,23 @@ def generate_real_detector_responses(signal_frequency, signal_lifetime, detector
     noise_l = generate_noise_array(max_noise_amp, number_time_samples)
 
     # 6. Combine signal + noise for both detectors using broadcasting
-    weights_h = np.array([fplus_hanford, fplus_hanford, fcross_hanford, fcross_hanford])
-    weights_l = np.array([fplus_livingston, fplus_livingston, fcross_livingston, fcross_livingston])
+    weights_h = cp.array([fplus_hanford, fplus_hanford, fcross_hanford, fcross_hanford])
+    weights_l = cp.array([fplus_livingston, fplus_livingston, fcross_livingston, fcross_livingston])
 
-    signal_h = np.dot(osc_hanford * weights_h, real_amplitudes)
-    signal_l = np.dot(osc_livingston * weights_l, real_amplitudes)
+    signal_h = cp.dot(osc_hanford * weights_h, real_amplitudes)
+    signal_l = cp.dot(osc_livingston * weights_l, real_amplitudes)
 
     # Shape: (time_samples, detectors)
-    small_response = np.stack([signal_h + noise_h, signal_l + noise_l], axis=1)
+    small_response = cp.stack([signal_h + noise_h, signal_l + noise_l], axis=1)
 
     # 7. Efficient duplication using broadcasting
-    real_detector_response_array = np.broadcast_to(
-        small_response[None, None, :, :],
+    real_detector_response_array = cp.broadcast_to(
+        small_response[cp.newaxis, cp.newaxis, :, :],
         (number_angular_samples, number_amplitude_combinations, number_time_samples, NUMBER_DETECTORS)
     ).copy()
 
-    real_angles_array = np.broadcast_to(
-        real_angles[None, :],
+    real_angles_array = cp.broadcast_to(
+        real_angles[cp.newaxis, :],
         (number_angular_samples, NUMBER_SOURCE_ANGLES)
     ).copy()
 
@@ -720,7 +718,8 @@ def get_best_fit_angles_deltas(real_detector_responses, real_angles_array,
         ]
     """
     # 1. Oracle best: angle delta to closest model angle
-    angle_deltas = np.abs(real_angles_array[0] - model_angles_array)
+    angle_deltas = cp.abs(real_angles_array[0] - model_angles_array)
+    cp.cuda.Stream.null.synchronize()
     summed_angle_deltas = np.sum(angle_deltas, axis=1)
     min_angle_idx = np.argmin(summed_angle_deltas)
     sum_real_minimum_angle_deltas = np.sum(np.abs(real_angles_array[0] - model_angles_array[min_angle_idx]))
