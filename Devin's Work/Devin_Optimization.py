@@ -681,12 +681,12 @@ def generate_real_detector_responses(signal_frequency, signal_lifetime, detector
     real_detector_response_array = cp.broadcast_to(
         small_response[cp.newaxis, cp.newaxis, :, :],
         (number_angular_samples, number_amplitude_combinations, number_time_samples, NUMBER_DETECTORS)
-    ).copy()
+    )
 
     real_angles_array = cp.broadcast_to(
         cp.asarray(real_angles)[None, :],
         (number_angular_samples, NUMBER_SOURCE_ANGLES)
-    ).copy()
+    )
 
     return real_detector_response_array, real_angles_array
 
