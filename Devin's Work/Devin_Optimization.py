@@ -692,7 +692,6 @@ def generate_real_detector_responses(signal_frequency, signal_lifetime, detector
 
 
 #=========================================================================
-# TODO: start converting to CuPy:
 def get_best_fit_angles_deltas(real_detector_responses, real_angles_array,
                                 model_detector_responses, model_angles_array):
     """
@@ -744,17 +743,13 @@ def get_best_fit_angles_deltas(real_detector_responses, real_angles_array,
         return cp.sum(cp.abs(real_angles_array[0] - weighted_angles))
 
     sum_real_maximum_weighted_response_angle_deltas = weighted_best_fit()
-    bench_single = benchmark(single_best_fit, (), n_repeat=50, n_warmup=10)
-    bench_weighted = benchmark(weighted_best_fit, (), n_repeat=50, n_warmup=10)
-    t_single_fit = (bench_single.gpu_times.mean())
-    t_weighted_fit = (bench_weighted.gpu_times.mean())
-
-    return [
+    deltas = [
         sum_real_minimum_angle_deltas,
         sum_real_minimum_response_angle_deltas,
-        sum_real_maximum_weighted_response_angle_deltas,
-        t_single_fit,
-        t_weighted_fit
+        sum_real_maximum_weighted_response_angle_deltas
+        ]
+    return [
+        deltas, single_best_fit, weighted_best_fit
     ]
 
 #========================================================================= START OF DRIVER FUNCTIONS =========================================================================
@@ -770,6 +765,7 @@ def run_northstar_pipeline(
 ):
     start = cp.cuda.Event()
     end = cp.cuda.Event()
+    # calculating runtime on a perfectly warmed up GPU.
     start.record()
     # Generate synthetic model and noisy real detector responses
     model_responses, model_angles = generate_model_detector_responses(
@@ -792,16 +788,24 @@ def run_northstar_pipeline(
     )
 
     # Run the angle comparison algorithms
-    best_fit_data = get_best_fit_angles_deltas(
+    deltas, single_func, weighted_func = get_best_fit_angles_deltas(
         real_responses,
         real_angles,
         model_responses,
         model_angles
     )
-
     end.record()
-    end.synchronize()
-    total_runtime = cp.cuda.get_elapsed_time(start, end)/1000
+    end.synchronize()  # ensure all GPU work is done before stopping the clock
+    total_runtime = cp.cuda.get_elapsed_time(start,end)/1000
+    bench_single = benchmark(single_func, (), n_repeat=50, n_warmup=10)
+    bench_weighted = benchmark(weighted_func, (), n_repeat=50, n_warmup=10)
+    t_single_fit = (bench_single.gpu_times.mean())
+    t_weighted_fit = (bench_weighted.gpu_times.mean())
+    best_fit_data = [
+        deltas[0], deltas[1], deltas[2],
+        t_single_fit,
+        t_weighted_fit,
+    ]
     # Create a human-readable timestamped filename
     timestamp = time.strftime("%d_%b_%Y_%H-%M-%S")
     filename = f"OPTIMIZED_northstar_output_{timestamp}.txt"
