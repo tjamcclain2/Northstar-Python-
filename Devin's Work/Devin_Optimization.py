@@ -89,7 +89,7 @@ def source_vector_from_angles(angles) :
 
 #=========================================================================
 
-def change_basis_gw_to_ec(source_angles) :
+def change_basis_gw_to_ec(source_angles, angle_grid) :
     
     """
         Compute the covariant change-of-basis matrix from the gravitational-wave frame to the Earth-centered frame. This function takes a list with the declination, right ascension, and polarization angles of a gravitational wave source in the Earth-centered 
@@ -112,13 +112,12 @@ def change_basis_gw_to_ec(source_angles) :
             gravitational-wave frame, yields its components in the Earth-centered frame.
     """
 
-    [declination, right_ascension, polarization] = source_angles
-    initial_source_vector = source_vector_from_angles(source_angles)
+    initial_source_vector = source_vector_from_angles(angle_grid)
     initial_gw_z_vector_earth_centered = -1 * initial_source_vector
     initial_gw_y_vector_earth_centered = np.array([
-            -np.sin(declination) * np.cos(right_ascension),
-            -np.sin(declination) * np.sin(right_ascension),
-            np.cos(declination)
+            -np.sin(angle_grid[:,0]) * np.cos(angle_grid[:,0]),
+            -np.sin(angle_grid[:,0]) * np.sin(angle_grid[:,0]),
+            np.cos(angle_grid[:,0])
         ])
     initial_gw_x_vector_earth_centered = np.cross(
             initial_gw_z_vector_earth_centered,
@@ -132,8 +131,8 @@ def change_basis_gw_to_ec(source_angles) :
         ]).T
         # Rotate by polarization about z_gw
     polarization_rotation_matrix = np.array([
-            [np.cos(polarization), -np.sin(polarization), 0],
-            [np.sin(polarization),  np.cos(polarization), 0],
+            [np.cos(source_angles[2]), -np.sin(source_angles[2]), 0],
+            [np.sin(source_angles[2]),  np.cos(source_angles[2]), 0],
             [0,                    0,                     1]
         ])
     contravariant_transformation_matrix = polarization_rotation_matrix @ initial_gw_vecs_ec
@@ -290,7 +289,7 @@ def detector_response(detector_angles, source_angles, tt_amplitudes) :
 
 
 
-def beam_pattern_response_functions(detector_angles,source_angles) :
+def beam_pattern_response_functions(detector_angles,source_angles, angle_grid) :
     """
     Compute the beam-pattern (antenna-pattern) response functions F₊ and Fₓ for a gravitational-wave detector. This function takes two lists -- the first containing the latitude, 
     longitude, and orientation angles of a gravitational wave detector, and the second containing the declination, right ascensions, 
@@ -578,8 +577,8 @@ def generate_model_detector_responses(
     )
 
     # Generate model amplitude and angle grids
-    amplitude_grid = generate_model_amplitudes_array(n_amp, gw_max_amps)  # shape (n_amp, 4)
-    angle_grid = generate_model_angles_array(n_ang)                     # shape (n_ang, 3)
+    amplitude_grid = generate_model_amplitudes_array(n_amp, gw_max_amps)  # shape (n_amp, 4) (100,4)
+    angle_grid = generate_model_angles_array(n_ang)                     # shape (n_ang, 3) (100,3)
 
     # Initialize output array: detectors=2 (0=H1, 1=L1)
     responses = cp.empty((n_ang, n_amp, n_times, 2))
@@ -587,7 +586,7 @@ def generate_model_detector_responses(
     # Loop over angle sets
     for i_ang, angles in enumerate(angle_grid):
         # Beam patterns for Hanford & Livingston
-        Fp_H, Fx_H = beam_pattern_response_functions(hanford_detector_angles, angles)
+        Fp_H, Fx_H = beam_pattern_response_functions(hanford_detector_angles, angles)  
         Fp_L, Fx_L = beam_pattern_response_functions(livingston_detector_angles, angles)
 
         # Weight Hanford oscillatory terms: shape (n_times, 4)
@@ -603,8 +602,8 @@ def generate_model_detector_responses(
         weighted_L = liv_terms * pattern_L[cp.newaxis, :]
         '''
         weighted_H.shape = (n_samples, 4)
-        amplitude_grid.shape = (n_amplitudes, 
-        transpose amplitude_grid → (4, n_amplitude
+        amplitude_grid.shape = (n_amplitudes, 4) 
+        transpose amplitude_grid → (4, n_amplitude)
         weighted_H @ amplitude_grid.T → (n_samples, n_amplitudes)
         # computes all (weighted_H @ amps) at once instead of looping
         '''
@@ -765,7 +764,7 @@ def run_northstar_pipeline(
 ):
     start = cp.cuda.Event()
     end = cp.cuda.Event()
-    # calculating runtime on a perfectly warmed up GPU.
+    # calculating runtime on a perfectly warmed up GPU i.e runtime minus the context initialization cost.
     start.record()
     # Generate synthetic model and noisy real detector responses
     model_responses, model_angles = generate_model_detector_responses(
