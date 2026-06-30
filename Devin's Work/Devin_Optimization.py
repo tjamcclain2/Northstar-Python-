@@ -63,7 +63,7 @@ def transform_0_2_tensor(matrix, change_basis_matrix) :
 
 #=========================================================================
 
-def source_vector_from_angles(angles) :
+def source_vector_from_angles(angle_grid) :
     
     """
         Compute a Cartesian unit vector from spherical coordinates. This function takes a list with three angles in it -- either the declination, right ascension, and polarization angles of a gravitational wave source, or the latitute, longitude, and orientation a gravitational wave detector 
@@ -83,13 +83,15 @@ def source_vector_from_angles(angles) :
             Unit-length vector in Cartesian (x, y, z) coordinates pointing from the Earth's center
             toward the specified direction.
     """
-    [first, second, third] = angles
-    initial_source_vector = np.array([np.cos(first)*np.cos(second), np.cos(first)*np.sin(second), np.sin(first)])
-    return initial_source_vector
+    #[first, second, third] = angles
+    all_first = angle_grid[:,0]
+    all_second = angle_grid[:,1]
+    initial_source_vector = cp.array([cp.cos(all_first)*cp.cos(all_second), cp.cos(all_first)*cp.sin(all_second), cp.sin(all_first)]).T # .T because we need (n_ang,3) 
+    return initial_source_vector # returns whole angle grid converted to source vector
 
 #=========================================================================
 
-def change_basis_gw_to_ec(source_angles, angle_grid) :
+def change_basis_gw_to_ec(angle_grid) :
     
     """
         Compute the covariant change-of-basis matrix from the gravitational-wave frame to the Earth-centered frame. This function takes a list with the declination, right ascension, and polarization angles of a gravitational wave source in the Earth-centered 
@@ -111,36 +113,45 @@ def change_basis_gw_to_ec(source_angles, angle_grid) :
             Covariant transformation matrix that, when applied to a vector expressed in the
             gravitational-wave frame, yields its components in the Earth-centered frame.
     """
-
     initial_source_vector = source_vector_from_angles(angle_grid)
     initial_gw_z_vector_earth_centered = -1 * initial_source_vector
-    initial_gw_y_vector_earth_centered = np.array([
-            -np.sin(angle_grid[:,0]) * np.cos(angle_grid[:,0]),
-            -np.sin(angle_grid[:,0]) * np.sin(angle_grid[:,0]),
-            np.cos(angle_grid[:,0])
-        ])
-    initial_gw_x_vector_earth_centered = np.cross(
+    all_declination = angle_grid[:,0]
+    all_right_ascension = angle_grid[:,1]
+    all_polarization = angle_grid[:,2]
+    initial_gw_y_vector_earth_centered = cp.array([
+            -cp.sin(all_declination) * cp.cos(all_right_ascension),
+            -cp.sin(all_declination) * cp.sin(all_right_ascension),
+            cp.cos(all_declination) 
+        ]).T  # .T because we need (n_ang,3)
+    initial_gw_x_vector_earth_centered = cp.cross(
             initial_gw_z_vector_earth_centered,
-            initial_gw_y_vector_earth_centered
-        )
-
-    initial_gw_vecs_ec = np.vstack([
+            initial_gw_y_vector_earth_centered,
+            axis=1)
+    # stack (with -1) adds a new axis at the end which makes it (angles, component, which_vector) (n,3,3) 
+    initial_gw_vecs_ec = cp.stack([
             initial_gw_x_vector_earth_centered,
             initial_gw_y_vector_earth_centered,
             initial_gw_z_vector_earth_centered
-        ]).T
+        ], axis=-1)
         # Rotate by polarization about z_gw
-    polarization_rotation_matrix = np.array([
-            [np.cos(source_angles[2]), -np.sin(source_angles[2]), 0],
-            [np.sin(source_angles[2]),  np.cos(source_angles[2]), 0],
-            [0,                    0,                     1]
+    cos_p = cp.cos(all_polarization)
+    sin_p = cp.sin(all_polarization)
+    # Create 1D tracking arrays filled with 0s and 1s matching the length of n_ang
+    zeros = cp.zeros_like(all_polarization)
+    ones = cp.ones_like(all_polarization)
+    polarization_rotation_matrices = cp.array([
+            [cos_p, -sin_p, zeros],
+            [sin_p,  cos_p, zeros],
+            [zeros,  zeros,  ones]
         ])
-    contravariant_transformation_matrix = polarization_rotation_matrix @ initial_gw_vecs_ec
-    change_basis_matrix = np.linalg.inv(contravariant_transformation_matrix)
-    return change_basis_matrix
+    # to get the shape (n_ang, 3, 3) so that the matmul can be applied to the 3x3 matrix
+    polarization_rotation_matrices = cp.transpose(polarization_rotation_matrices, (2,0,1))
+
+    contravariant_transformation_matrices = polarization_rotation_matrices @ initial_gw_vecs_ec
+    change_basis_matrices = cp.linalg.inv(contravariant_transformation_matrices)
+    return change_basis_matrices
 
 #=========================================================================
-
 
 def gravitational_wave_ec_frame(source_angles,tt_amplitudes) :
     
@@ -492,11 +503,11 @@ def generate_model_angles_array(number_angular_samples) :
     """
     
     # Declinations: uniform in [–π/2, π/2]
-    dec = (np.random.rand(number_angular_samples) - 0.5) * np.pi
+    dec = (cp.random.rand(number_angular_samples) - 0.5) * cp.pi
     # Right ascension & polarization: uniform in [0, 2π)
-    ra_psi = np.random.rand(number_angular_samples, 2) * 2 * np.pi
+    ra_psi = cp.random.rand(number_angular_samples, 2) * 2 * cp.pi
     # Stack into shape (N, 3)
-    angle_grid = np.column_stack((dec, ra_psi))
+    angle_grid = cp.column_stack((dec, ra_psi))
     return angle_grid
 
 #=========================================================================
@@ -831,8 +842,6 @@ def run_northstar_pipeline(
             f.write(line + "\n")
 
     print(f"\n[OK] Output also written to: {filename}")
-if __name__ == "__main__":
+if __name__=="__main__":
     run_northstar_pipeline()
-
-
-
+    
