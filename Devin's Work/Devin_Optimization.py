@@ -45,21 +45,22 @@ livingston_detector_angles = np.array([
 
 # transforms rank-2 contravariant tensor under a change of basis
 def transform_2_0_tensor(matrix, change_basis_matrix) :
-    contravariant_transformation_matrix = np.linalg.inv(change_basis_matrix)
-    partial_transformation = np.einsum('ki,kl->il', contravariant_transformation_matrix, matrix)
-    return np.einsum('lj,il->ij', contravariant_transformation_matrix, partial_transformation)
+    matrix = cp.broadcast_to(matrix, (change_basis_matrix.shape[0], 3, 3))  # for readability
+    contravariant_transformation_matrix = cp.linalg.inv(change_basis_matrix)
+    partial_transformation = cp.einsum('aki,akl->ail', contravariant_transformation_matrix, matrix)
+    return cp.einsum('alj,ail->aij', contravariant_transformation_matrix, partial_transformation)
 
 # transforms mixed tensor
+# Note: This is not used in the current code, but provided for completeness
 def transform_1_1_tensor(matrix, change_basis_matrix) :
     contravariant_transformation_matrix = np.linalg.inv(change_basis_matrix)
     partial_transformation = np.einsum('ik,kl->il', change_basis_matrix, matrix)
     return np.einsum('lj,il->ij', contravariant_transformation_matrix, partial_transformation)
 
 # transforms rank-2 covariant tensor under a change of basis
-# Note: This is not used in the current code, but provided for completeness
 def transform_0_2_tensor(matrix, change_basis_matrix) :
-    partial_transformation = np.einsum('ik,kl->il', change_basis_matrix, matrix)
-    return np.einsum('jl,il->ij', change_basis_matrix, partial_transformation)
+    partial_transformation = cp.einsum('aik,akl->ail', change_basis_matrix, matrix)
+    return cp.einsum('ajl,ail->aij', change_basis_matrix, partial_transformation)
 
 #=========================================================================
 
@@ -139,6 +140,7 @@ def change_basis_gw_to_ec(angle_grid) :
     # Create 1D tracking arrays filled with 0s and 1s matching the length of n_ang
     zeros = cp.zeros_like(all_polarization)
     ones = cp.ones_like(all_polarization)
+    
     polarization_rotation_matrices = cp.array([
             [cos_p, -sin_p, zeros],
             [sin_p,  cos_p, zeros],
@@ -152,44 +154,6 @@ def change_basis_gw_to_ec(angle_grid) :
     return change_basis_matrices
 
 #=========================================================================
-
-def gravitational_wave_ec_frame(source_angles,tt_amplitudes) :
-    
-    """
-    Compute the gravitational-wave strain tensor in Earth-centered coordinates. This function takes two lists -- the first containing the declination, right ascension, and polarization angles of the source, the second containing the "plus" and "cross" strain amplitudes of 
-    the gravitational wave in the transverse, traceless ("TT") gauge of the gravitational wave frame -- and returns a NumPy array characterizing the gravitational wave's strain amplitudes in 
-    the Earth-centered frame. Note that the strain tensor is a (0-2) tensor.
-    
-    Parameters
-    ----------
-    source_angles : array-like of float, shape (3,)
-        Three angles (in radians) defining the source orientation in Earth-centered frame:
-        - declination δ
-        - right ascension α
-        - polarization ψ
-    tt_amplitudes : array-like of float, shape (2,)
-        Transverse-traceless ("TT") strain amplitudes in the GW frame:
-        - h_plus (h₊)
-        - h_cross (hₓ)
-
-    Returns
-    -------
-    strain_ec : ndarray of float, shape (3, 3)
-        The (0,2) GW strain tensor components expressed in Earth-centered coordinates.
-    
-    """
-    # Changed variable names for readability
-    h_plus, h_cross = tt_amplitudes
-    gw_tt = np.array([
-        [h_plus,  h_cross, 0],
-        [h_cross, -h_plus, 0],
-        [0,       0,       0]
-    ])
-    change_mat = change_basis_gw_to_ec(source_angles)
-    return transform_0_2_tensor(gw_tt, change_mat)
-
-#=========================================================================
-
 
 def change_basis_detector_to_ec(detector_angles) :
     
@@ -241,66 +205,10 @@ def change_basis_detector_to_ec(detector_angles) :
     # Directly inverted the contravariant matrix in one line
     change_basis_matrix = np.linalg.inv(T_contravariant)
     return change_basis_matrix
-    
 
 #=========================================================================
 
-def detector_response(detector_angles, source_angles, tt_amplitudes) :
-    
-    """
-    Compute the scalar strain measured by a gravitational-wave detector. This function takes three lists -- the first containing the latitude, longitude, and orientation angles of a gravitational wave detector, 
-    the second containing the declination, right ascension, and polarization angles of the source, and the third containing the "plus" and "cross" 
-    strain amplitudes of the gravitational wave in the transverse, traceless ("TT") gauge -- and returns a scalar representing the strain measured by the gravitational wave detector. 
-    Note that the detector response tensor is a (2-0) tensor.
-
-    Parameters
-    ----------
-    detector_angles : array-like of float, shape (3,)
-        Detector orientation in Earth-centered coordinates (radians):
-        - latitude θ
-        - longitude ϕ
-        - orientation γ (rotation about local vertical)
-    source_angles : array-like of float, shape (3,)
-        Source orientation in Earth-centered coordinates (radians):
-        - declination δ
-        - right ascension α
-        - polarization ψ
-    tt_amplitudes : array-like of float, shape (2,)
-        Transverse-traceless strain amplitudes in GW frame:
-        - h₊ (plus)
-        - hₓ (cross)
-
-    Returns
-    -------
-    response : float
-        Scalar detector response: the double contraction of the Earth-frame
-        GW strain tensor with the detector’s response tensor.
-    """
-    # Detector-frame response tensor (2-0)
-    D_det = np.array([
-        [0.5,  0.0, 0.0],
-        [0.0, -0.5, 0.0],
-        [0.0,  0.0, 0.0]
-    ])
-
-    # Covariant change-of-basis matrix for detector → Earth-centered
-    R_det_ec = change_basis_detector_to_ec(detector_angles)
-
-    # Transform detector response tensor into Earth-centered frame
-    D_ec = transform_2_0_tensor(D_det, R_det_ec)
-
-    # Get GW strain tensor in Earth-centered frame
-    h_ec = gravitational_wave_ec_frame(source_angles, tt_amplitudes)
-
-    # Double contraction over both tensor indices → scalar
-    return np.tensordot(h_ec, D_ec, axes=([0, 1], [0, 1]))
-
-
-#=========================================================================
-
-
-
-def beam_pattern_response_functions(detector_angles,source_angles, angle_grid) :
+def beam_pattern_response_functions(detector_angles, angle_grid) :
     """
     Compute the beam-pattern (antenna-pattern) response functions F₊ and Fₓ for a gravitational-wave detector. This function takes two lists -- the first containing the latitude, 
     longitude, and orientation angles of a gravitational wave detector, and the second containing the declination, right ascensions, 
@@ -340,8 +248,8 @@ def beam_pattern_response_functions(detector_angles,source_angles, angle_grid) :
     D_ec    = transform_2_0_tensor(D_det, R_det_ec)
 
     # Change-of-basis: Earth-centered → GW frame
-    R_gw_ec = change_basis_gw_to_ec(source_angles)
-    R_ec_gw = np.linalg.inv(R_gw_ec)
+    R_gw_ec = change_basis_gw_to_ec(angle_grid)
+    R_ec_gw = cp.linalg.inv(R_gw_ec)
     D_gw    = transform_2_0_tensor(D_ec, R_ec_gw)
 
     # Extract plus and cross responses
@@ -844,4 +752,5 @@ def run_northstar_pipeline(
     print(f"\n[OK] Output also written to: {filename}")
 if __name__=="__main__":
     run_northstar_pipeline()
-    
+
+#LATEST
