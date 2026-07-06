@@ -45,10 +45,9 @@ livingston_detector_angles = np.array([
 
 # transforms rank-2 contravariant tensor under a change of basis
 def transform_2_0_tensor(matrix, change_basis_matrix) :
-    matrix = cp.broadcast_to(matrix, (change_basis_matrix.shape[0], 3, 3))  # for readability
     contravariant_transformation_matrix = cp.linalg.inv(change_basis_matrix)
-    partial_transformation = cp.einsum('aki,akl->ail', contravariant_transformation_matrix, matrix)
-    return cp.einsum('alj,ail->aij', contravariant_transformation_matrix, partial_transformation)
+    partial_transformation = cp.einsum('...ki,...kl->...il', contravariant_transformation_matrix, matrix)
+    return cp.einsum('...lj,...il->...ij', contravariant_transformation_matrix, partial_transformation)
 
 # transforms mixed tensor
 # Note: This is not used in the current code, but provided for completeness
@@ -58,6 +57,7 @@ def transform_1_1_tensor(matrix, change_basis_matrix) :
     return np.einsum('lj,il->ij', contravariant_transformation_matrix, partial_transformation)
 
 # transforms rank-2 covariant tensor under a change of basis
+# Note: This is not used in the current code, but provided for completeness
 def transform_0_2_tensor(matrix, change_basis_matrix) :
     partial_transformation = cp.einsum('aik,akl->ail', change_basis_matrix, matrix)
     return cp.einsum('ajl,ail->aij', change_basis_matrix, partial_transformation)
@@ -85,8 +85,8 @@ def source_vector_from_angles(angle_grid) :
             toward the specified direction.
     """
     #[first, second, third] = angles
-    all_first = angle_grid[:,0]
-    all_second = angle_grid[:,1]
+    all_first = angle_grid[..., 0]
+    all_second = angle_grid[..., 1]
     initial_source_vector = cp.array([cp.cos(all_first)*cp.cos(all_second), cp.cos(all_first)*cp.sin(all_second), cp.sin(all_first)]).T # .T because we need (n_ang,3) 
     return initial_source_vector # returns whole angle grid converted to source vector
 
@@ -185,25 +185,26 @@ def change_basis_detector_to_ec(detector_angles) :
     z_det_ec = source_vector_from_angles(detector_angles)
 
     # x̂_det is tangent eastward
-    x_det_ec = np.array([-np.sin(longitude), np.cos(longitude), 0.0])
+    x_det_ec = cp.array([-cp.sin(longitude), cp.cos(longitude), 0.0])
 
     # ŷ_det completes right-handed set
-    y_det_ec = np.cross(z_det_ec, x_det_ec)
+    y_det_ec = cp.cross(z_det_ec, x_det_ec)
 
     # Stack as columns to form the GW-frame basis matrix in EC coords
-    det_vecs_ec = np.vstack([x_det_ec, y_det_ec, z_det_ec]).T
+    det_vecs_ec = cp.vstack([x_det_ec, y_det_ec, z_det_ec]).T
+
 
     # Rotate about local vertical (z_det_ec) by orientation γ
-    orientation_rotation = np.array([
-        [np.cos(orientation), -np.sin(orientation), 0.0],
-        [np.sin(orientation),  np.cos(orientation), 0.0],
+    orientation_rotation = cp.array([
+        [cp.cos(orientation), -cp.sin(orientation), 0.0],
+        [cp.sin(orientation),  cp.cos(orientation), 0.0],
         [0.0,                  0.0,                 1.0]
     ])
 
     T_contravariant = orientation_rotation @ det_vecs_ec
     
     # Directly inverted the contravariant matrix in one line
-    change_basis_matrix = np.linalg.inv(T_contravariant)
+    change_basis_matrix = cp.linalg.inv(T_contravariant)
     return change_basis_matrix
 
 #=========================================================================
@@ -237,31 +238,31 @@ def beam_pattern_response_functions(detector_angles, angle_grid) :
     """
     
     # Detector‐frame response tensor (2-0)
-    D_det = np.array([
+    arm_response_tensor = cp.array([
         [0.5,  0.0, 0.0],
         [0.0, -0.5, 0.0],
         [0.0,  0.0, 0.0]
     ])
 
     # Change-of-basis: detector frame → Earth-centered
-    R_det_ec = change_basis_detector_to_ec(detector_angles)
-    D_ec    = transform_2_0_tensor(D_det, R_det_ec)
+    det_to_ec_basis = change_basis_detector_to_ec(detector_angles)
+    arm_response_tensor_ec = transform_2_0_tensor(arm_response_tensor, det_to_ec_basis)
 
     # Change-of-basis: Earth-centered → GW frame
-    R_gw_ec = change_basis_gw_to_ec(angle_grid)
-    R_ec_gw = cp.linalg.inv(R_gw_ec)
-    D_gw    = transform_2_0_tensor(D_ec, R_ec_gw)
+    gw_to_ec_basis = change_basis_gw_to_ec(angle_grid)
+    ec_to_gw_basis = cp.linalg.inv(gw_to_ec_basis)
+    arm_response_tensor_gw = transform_2_0_tensor(arm_response_tensor_ec, ec_to_gw_basis) #cupy ndarray of size(n_ang, 3, 3)
 
     # Extract plus and cross responses
-    F_plus  = D_gw[0, 0] - D_gw[1, 1]
-    F_cross = D_gw[0, 1] + D_gw[1, 0]
+    F_plus  = arm_response_tensor_gw[:, 0, 0] - arm_response_tensor_gw[:, 1, 1]
+    F_cross = arm_response_tensor_gw[:, 0, 1] + arm_response_tensor_gw[:, 1, 0]
 
     return F_plus, F_cross
     
 
 #=========================================================================
 
-def time_delay_hanford_to_livingston(source_angles) :
+def time_delay_hanford_to_livingston(angle_grid) :
     
     """
     Compute the gravitational-wave arrival time delay between the Hanford and Livingston detectors. This function take a list of the declination, right ascension, 
@@ -292,10 +293,10 @@ def time_delay_hanford_to_livingston(source_angles) :
     baseline = r_L - r_H
 
     # GW propagation direction (unit vector) in Earth frame
-    propagation_dir = -source_vector_from_angles(source_angles)
+    propagation_dir = -source_vector_from_angles(angle_grid) # (n_ang, 3)
 
     # Return time delay (s)
-    return np.dot(propagation_dir, baseline) / SPEED_OF_LIGHT
+    return cp.dot(propagation_dir, baseline) / SPEED_OF_LIGHT
 
 #=========================================================================
 
@@ -330,7 +331,7 @@ def generate_network_time_array(signal_lifetime, detector_sampling_rate, maximum
     T_max = signal_lifetime + maximum_time_delay
 
     # Number of samples on each side of zero
-    half_samples = int(np.ceil(T_max * detector_sampling_rate))
+    half_samples = int(cp.ceil(T_max * detector_sampling_rate))
 
     # Generate symmetric time array around zero
     time_array = cp.arange(-half_samples, half_samples) / detector_sampling_rate
@@ -371,19 +372,30 @@ def generate_oscillatory_terms(signal_lifetime, signal_frequency, time_array, ti
     Q = cp.sqrt(cp.log(2)) / signal_lifetime
 
     # Time relative to arrival at this detector
-    dt = time_array - time_delay
-
+    time_delay = cp.atleast_1d(time_delay)
+    dt = time_array[cp.newaxis, :] - time_delay[:, cp.newaxis] # dt = (n_ang, n_times)
+    
     # Envelope and phase arrays
     envelope = cp.exp(-Q**2 * dt**2)
-    phase    = 2 * cp.pi * signal_frequency * dt
+    phase    = 2 * cp.pi * signal_frequency * dt 
 
     # Cosine- and sine-modulated terms
     A_plus = envelope * cp.cos(phase)
     B_cross = envelope * cp.sin(phase)
 
     # Stack into (N,4) for the four modes [A₊, Bₓ, A₊, Bₓ]
-    oscillatory_terms = cp.column_stack([A_plus, B_cross, A_plus, B_cross])
-
+    oscillatory_terms = cp.stack([A_plus, B_cross, A_plus, B_cross], axis=-1)
+    '''
+    (n_ang, n_times, 4)
+    time 0:
+    angle0: [a00, b00, a00, b00]   ← the 4 modes, cleanly grouped
+    angle1: [a01, b01, a01, b01]
+    angle2: [a02, b02, a02, b02]
+    time 1:
+    angle0: [a10, b10, a10, b10]
+    angle1: [a11, b11, a11, b11]
+    angle2: [a12, b12, a12, b12]
+    '''
     return oscillatory_terms
 
 #=========================================================================
@@ -502,32 +514,25 @@ def generate_model_detector_responses(
     # Initialize output array: detectors=2 (0=H1, 1=L1)
     responses = cp.empty((n_ang, n_amp, n_times, 2))
 
-    # Loop over angle sets
-    for i_ang, angles in enumerate(angle_grid):
-        # Beam patterns for Hanford & Livingston
-        Fp_H, Fx_H = beam_pattern_response_functions(hanford_detector_angles, angles)  
-        Fp_L, Fx_L = beam_pattern_response_functions(livingston_detector_angles, angles)
-
-        # Weight Hanford oscillatory terms: shape (n_times, 4)
-        pattern_H = cp.array([Fp_H, Fx_H, Fp_H, Fx_H])
-        weighted_H = hanford_terms * pattern_H[cp.newaxis, :]
-
-        # Compute Livingston oscillatory terms with its time delay
-        delay_L = time_delay_hanford_to_livingston(angles)
-        liv_terms = generate_oscillatory_terms(
+    Fp_H, Fx_H = beam_pattern_response_functions(hanford_detector_angles, angle_grid)  
+    Fp_L, Fx_L = beam_pattern_response_functions(livingston_detector_angles, angle_grid)
+    pattern_H = cp.array([Fp_H, Fx_H, Fp_H, Fx_H]).T  # (n_ang, 4)
+    weighted_H = hanford_terms * pattern_H[:, cp.newaxis, :]
+    delay_L = time_delay_hanford_to_livingston(angle_grid)
+    liv_terms = generate_oscillatory_terms(
             signal_lifetime, signal_frequency, time_array, delay_L
-        )
-        pattern_L = cp.array([Fp_L, Fx_L, Fp_L, Fx_L])
-        weighted_L = liv_terms * pattern_L[cp.newaxis, :]
-        '''
-        weighted_H.shape = (n_samples, 4)
+        )   
+    pattern_L = cp.array([Fp_L, Fx_L, Fp_L, Fx_L]).T # (n_ang, 4)
+    weighted_L = liv_terms * pattern_L[:, cp.newaxis, :]
+
+    # einsum
+    '''
+        weighted_H.shape = (n_ang, n_times, 4)
         amplitude_grid.shape = (n_amplitudes, 4) 
-        transpose amplitude_grid → (4, n_amplitude)
-        weighted_H @ amplitude_grid.T → (n_samples, n_amplitudes)
         # computes all (weighted_H @ amps) at once instead of looping
-        '''
-        responses[i_ang, :, :, 0] = (weighted_H @ amplitude_grid.T).T
-        responses[i_ang, :, :, 1] = (weighted_L @ amplitude_grid.T).T
+    '''
+    responses[:, :, :, 0] = cp.einsum('atm,pm->apt', weighted_H, amplitude_grid)
+    responses[:, :, :, 1] = cp.einsum('atm,pm->apt', weighted_L, amplitude_grid)
     return responses, angle_grid
 
 
