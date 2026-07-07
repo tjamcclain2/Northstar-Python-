@@ -26,19 +26,19 @@ WEIGHTING_POWER = 2
 
 # Helper to convert (deg, min, sec) to radians
 def dms_to_rad(deg, minutes, seconds):
-    return np.deg2rad(deg + minutes / 60 + seconds / 3600)
+    return cp.deg2rad(deg + minutes / 60 + seconds / 3600)
 
 # Detector angles: [latitude, longitude, orientation]
-hanford_detector_angles = np.array([
+hanford_detector_angles = cp.array([
     dms_to_rad(46, 27, 18.528),
     dms_to_rad(240, 35, 32.4343),
-    np.deg2rad(125.9994) + np.pi / 2
+    cp.deg2rad(125.9994) + cp.pi / 2
 ])
 
-livingston_detector_angles = np.array([
+livingston_detector_angles = cp.array([
     dms_to_rad(30, 33, 46.4196),
     dms_to_rad(269, 13, 32.7346),
-    np.deg2rad(197.7165) + np.pi / 2
+    cp.deg2rad(197.7165) + cp.pi / 2
 ])
 
 #=========================================================================
@@ -116,9 +116,9 @@ def change_basis_gw_to_ec(angle_grid) :
     """
     initial_source_vector = source_vector_from_angles(angle_grid)
     initial_gw_z_vector_earth_centered = -1 * initial_source_vector
-    all_declination = angle_grid[:,0]
-    all_right_ascension = angle_grid[:,1]
-    all_polarization = angle_grid[:,2]
+    all_declination = angle_grid[...,0]
+    all_right_ascension = angle_grid[...,1]
+    all_polarization = angle_grid[...,2]
     initial_gw_y_vector_earth_centered = cp.array([
             -cp.sin(all_declination) * cp.cos(all_right_ascension),
             -cp.sin(all_declination) * cp.sin(all_right_ascension),
@@ -185,7 +185,7 @@ def change_basis_detector_to_ec(detector_angles) :
     z_det_ec = source_vector_from_angles(detector_angles)
 
     # x̂_det is tangent eastward
-    x_det_ec = cp.array([-cp.sin(longitude), cp.cos(longitude), 0.0])
+    x_det_ec = cp.array([-cp.sin(longitude), cp.cos(longitude), cp.array(0.0)]) # array because 0-d array and python float mismatch
 
     # ŷ_det completes right-handed set
     y_det_ec = cp.cross(z_det_ec, x_det_ec)
@@ -196,9 +196,9 @@ def change_basis_detector_to_ec(detector_angles) :
 
     # Rotate about local vertical (z_det_ec) by orientation γ
     orientation_rotation = cp.array([
-        [cp.cos(orientation), -cp.sin(orientation), 0.0],
-        [cp.sin(orientation),  cp.cos(orientation), 0.0],
-        [0.0,                  0.0,                 1.0]
+        [cp.cos(orientation), -cp.sin(orientation),  cp.array(0.0)],
+        [cp.sin(orientation),  cp.cos(orientation),  cp.array(0.0)],
+        [cp.array(0.0),              cp.array(0.0),  cp.array(1.0)]
     ])
 
     T_contravariant = orientation_rotation @ det_vecs_ec
@@ -517,7 +517,7 @@ def generate_model_detector_responses(
     Fp_H, Fx_H = beam_pattern_response_functions(hanford_detector_angles, angle_grid)  
     Fp_L, Fx_L = beam_pattern_response_functions(livingston_detector_angles, angle_grid)
     pattern_H = cp.array([Fp_H, Fx_H, Fp_H, Fx_H]).T  # (n_ang, 4)
-    weighted_H = hanford_terms * pattern_H[:, cp.newaxis, :]
+    weighted_H = hanford_terms * pattern_H[:, cp.newaxis, :] 
     delay_L = time_delay_hanford_to_livingston(angle_grid)
     liv_terms = generate_oscillatory_terms(
             signal_lifetime, signal_frequency, time_array, delay_L
@@ -529,6 +529,7 @@ def generate_model_detector_responses(
     '''
         weighted_H.shape = (n_ang, n_times, 4)
         amplitude_grid.shape = (n_amplitudes, 4) 
+        needed shape = (n_ang, n_amp, n_times)
         # computes all (weighted_H @ amps) at once instead of looping
     '''
     responses[:, :, :, 0] = cp.einsum('atm,pm->apt', weighted_H, amplitude_grid)
@@ -575,11 +576,12 @@ def generate_real_detector_responses(signal_frequency, signal_lifetime, detector
 
     # 2. Sample 1 true amplitude and angle
     real_amplitudes = generate_model_amplitudes_array(1, gw_max_amps)[0]
-    real_angles = generate_model_angles_array(1)[0]
+    real_angles = generate_model_angles_array(1)[0] # returns (3,)
+    real_angle_batch = real_angles[cp.newaxis, :] # makes it (1,3)
 
     # 3. Detector beam pattern responses
-    fplus_hanford, fcross_hanford = beam_pattern_response_functions(hanford_detector_angles, real_angles)
-    fplus_livingston, fcross_livingston = beam_pattern_response_functions(livingston_detector_angles, real_angles)
+    fplus_hanford, fcross_hanford = beam_pattern_response_functions(hanford_detector_angles, real_angle_batch)
+    fplus_livingston, fcross_livingston = beam_pattern_response_functions(livingston_detector_angles, real_angle_batch)
 
     # 4. Time delay and oscillatory terms
     time_delay = time_delay_hanford_to_livingston(real_angles)
@@ -591,8 +593,8 @@ def generate_real_detector_responses(signal_frequency, signal_lifetime, detector
     noise_l = generate_noise_array(max_noise_amp, number_time_samples)
 
     # 6. Combine signal + noise for both detectors using broadcasting
-    weights_h = cp.array([fplus_hanford, fplus_hanford, fcross_hanford, fcross_hanford])
-    weights_l = cp.array([fplus_livingston, fplus_livingston, fcross_livingston, fcross_livingston])
+    weights_h = cp.array([fplus_hanford[0], fcross_hanford[0], fplus_hanford[0], fcross_hanford[0]]).T # (n_ang, 1)
+    weights_l = cp.array([fplus_livingston[0], fcross_livingston[0], fplus_livingston[0], fcross_livingston[0]]).T 
 
     signal_h = cp.dot(osc_hanford * weights_h, real_amplitudes)
     signal_l = cp.dot(osc_livingston * weights_l, real_amplitudes)
