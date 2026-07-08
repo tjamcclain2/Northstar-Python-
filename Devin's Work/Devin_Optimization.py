@@ -585,18 +585,20 @@ def generate_real_detector_responses(signal_frequency, signal_lifetime, detector
 
     # 4. Time delay and oscillatory terms
     time_delay = time_delay_hanford_to_livingston(real_angles)
-    osc_hanford = generate_oscillatory_terms(signal_lifetime, signal_frequency, time_array, 0)
+    osc_hanford = generate_oscillatory_terms(signal_lifetime, signal_frequency, time_array, 0) # (1, n_times, 4)
     osc_livingston = generate_oscillatory_terms(signal_lifetime, signal_frequency, time_array, time_delay)
+    osc_hanford = cp.squeeze(osc_hanford, axis=0)
+    osc_livingston = cp.squeeze(osc_livingston, axis=0)
 
     # 5. Noise arrays
     noise_h = generate_noise_array(max_noise_amp, number_time_samples)
     noise_l = generate_noise_array(max_noise_amp, number_time_samples)
 
     # 6. Combine signal + noise for both detectors using broadcasting
-    weights_h = cp.array([fplus_hanford[0], fcross_hanford[0], fplus_hanford[0], fcross_hanford[0]]).T # (n_ang, 1)
-    weights_l = cp.array([fplus_livingston[0], fcross_livingston[0], fplus_livingston[0], fcross_livingston[0]]).T 
+    weights_h = cp.array([fplus_hanford[0], fcross_hanford[0], fplus_hanford[0], fcross_hanford[0]]) # (4,)
+    weights_l = cp.array([fplus_livingston[0], fcross_livingston[0], fplus_livingston[0], fcross_livingston[0]]) 
 
-    signal_h = cp.dot(osc_hanford * weights_h, real_amplitudes)
+    signal_h = cp.dot(osc_hanford * weights_h, real_amplitudes) # (n_times,)
     signal_l = cp.dot(osc_livingston * weights_l, real_amplitudes)
 
     # Shape: (time_samples, detectors)
@@ -609,7 +611,7 @@ def generate_real_detector_responses(signal_frequency, signal_lifetime, detector
     )
 
     real_angles_array = cp.broadcast_to(
-        cp.asarray(real_angles)[None, :],
+        cp.array(real_angles)[None, :],
         (number_angular_samples, NUMBER_SOURCE_ANGLES)
     )
 
@@ -641,7 +643,7 @@ def get_best_fit_angles_deltas(real_detector_responses, real_angles_array,
         ]
     """
     # 1. Oracle best: angle delta to closest model angle
-    model_angles_array = cp.asarray(model_angles_array)
+    model_angles_array = cp.array(model_angles_array)
     angle_deltas = cp.abs(real_angles_array[0] - model_angles_array)
     summed_angle_deltas = cp.sum(angle_deltas, axis=1)
     min_angle_idx = cp.argmin(summed_angle_deltas)
@@ -685,8 +687,8 @@ def run_northstar_pipeline(
     detector_sampling_rate=LIGO_DETECTOR_SAMPLING_RATE,
     gw_max_amps=1,
     max_noise_amp=0.1,
-    number_angular_samples=100,
-    number_amplitude_combinations=100
+    number_angular_samples=500,
+    number_amplitude_combinations=500
 ):
     start = cp.cuda.Event()
     end = cp.cuda.Event()
