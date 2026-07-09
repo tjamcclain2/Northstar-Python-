@@ -326,7 +326,7 @@ def generate_network_time_array(signal_lifetime, detector_sampling_rate, maximum
         sampled at 1/detector_sampling_rate intervals.
 
     """
-            
+
     # Total half-window in seconds
     T_max = signal_lifetime + maximum_time_delay
 
@@ -559,9 +559,14 @@ def generate_noise_array(max_noise_amp,number_time_samples) :
 
 #=========================================================================
 
-def generate_real_detector_responses(signal_frequency, signal_lifetime, detector_sampling_rate,
-                                     gw_max_amps, number_amplitude_combinations,
-                                     number_angular_samples, max_noise_amp):
+def generate_real_detector_responses(
+        signal_frequency,
+        signal_lifetime,
+        detector_sampling_rate,
+        gw_max_amps, number_amplitude_combinations,
+        number_angular_samples, 
+        max_noise_amp
+        ):
     """
     Efficiently generates a simulated detector response for one gravitational wave signal,
     duplicating it across model parameter combinations to match later processing.
@@ -615,8 +620,7 @@ def generate_real_detector_responses(signal_frequency, signal_lifetime, detector
         (number_angular_samples, NUMBER_SOURCE_ANGLES)
     )
 
-    return real_detector_response_array, real_angles_array
-
+    return real_detector_response_array, real_angles_array 
 
 #=========================================================================
 def get_best_fit_angles_deltas(real_detector_responses, real_angles_array,

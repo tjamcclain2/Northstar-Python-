@@ -665,8 +665,8 @@ def generate_real_detector_responses(signal_frequency, signal_lifetime, detector
     noise_l = generate_noise_array(max_noise_amp, number_time_samples)
 
     # 6. Combine signal + noise for both detectors using broadcasting
-    weights_h = np.array([fplus_hanford, fplus_hanford, fcross_hanford, fcross_hanford])
-    weights_l = np.array([fplus_livingston, fplus_livingston, fcross_livingston, fcross_livingston])
+    weights_h = np.array([fplus_hanford, fcross_hanford, fplus_hanford, fcross_hanford])
+    weights_l = np.array([fplus_livingston, fcross_livingston, fplus_livingston, fcross_livingston])
 
     signal_h = np.dot(osc_hanford * weights_h, real_amplitudes)
     signal_l = np.dot(osc_livingston * weights_l, real_amplitudes)
@@ -685,7 +685,7 @@ def generate_real_detector_responses(signal_frequency, signal_lifetime, detector
         (number_angular_samples, NUMBER_SOURCE_ANGLES)
     ).copy()
 
-    return real_detector_response_array, real_angles_array
+    return real_detector_response_array, real_angles_array 
 
 
 #=========================================================================
