@@ -2,6 +2,17 @@ import numpy as np
 import cupy as cp
 import devin_optimized as op
 import northstar_og_abid as og
+"""
+Correctness harness: compares devin_optimized against northstar_og_abid.
+
+PREREQUISITE — before running, the two pipeline functions must accept
+injected inputs. They generate grids internally by default, so to test:
+  1. In BOTH devin_optimized.py and northstar_og_abid.py, make
+     generate_model_detector_responses / generate_real_detector_responses
+     take amplitude_grid/angle_grid (and real_amplitudes/real_angles) as params.
+  2. Comment out the internal generate_model_* calls inside those functions.
+  3. Run: python test_correctness.py
+"""
 
 def compare(func_name, cpu_out, gpu_out, rtol = 1e-5, atol = 1e-8):
     gpu_on_host = cp.asnumpy(gpu_out)
@@ -9,23 +20,7 @@ def compare(func_name, cpu_out, gpu_out, rtol = 1e-5, atol = 1e-8):
     ok = np.allclose(cpu, gpu_on_host, rtol=rtol, atol=atol)
     max_diff = np.max(np.abs(cpu - gpu_on_host))
     print(f"{func_name:40s} {'PASS' if ok else 'FAIL'} max|diff| = {max_diff:.2e}")
-'''
-Layer 0 (leaves, test first):
-    source_vector_from_angles
-    transform_2_0_tensor
-    generate_oscillatory_terms
 
-Layer 1 (depend only on layer 0):
-    change_basis_gw_to_ec          (needs source_vector)
-    change_basis_detector_to_ec    (needs source_vector)
-    time_delay_hanford_to_livingston (needs source_vector)
-
-Layer 2 (depend on layer 1):
-    beam_pattern_response_functions (needs both change_basis fns + transform_2_0)
-
-Layer 3 (top):
-    generate_model_detector_responses (needs beam_pattern, time_delay, osc terms)
-'''
 angle_grid_cpu = np.array([
     [ 0.30,  1.20,  0.70],
     [-0.85,  4.50,  2.10],
