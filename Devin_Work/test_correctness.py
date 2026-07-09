@@ -89,3 +89,19 @@ compare("beam pattern Fplus", og_fp, op_fp)
 compare("beam pattern Fcross", og_fx, op_fx)
 
 #generate_model_detector_responses
+gw_frequency=100
+gw_lifetime=0.03
+detector_sampling_rate=op.LIGO_DETECTOR_SAMPLING_RATE
+gw_max_amps=1
+max_noise_amp=0.1
+number_angular_samples=100
+number_amplitude_combinations=100
+ang_cpu = og.generate_model_angles_array(number_angular_samples)
+amp_cpu = og.generate_model_amplitudes_array(number_amplitude_combinations, gw_max_amps)
+ang_gpu = cp.asarray(ang_cpu)
+amp_gpu = cp.asarray(amp_cpu)
+m_resp_gpu, m_ang_gpu = op.generate_model_detector_responses(amp_gpu, ang_gpu, gw_frequency, gw_lifetime, detector_sampling_rate, gw_max_amps, number_amplitude_combinations, number_angular_samples)
+m_resp_cpu, m_ang_cpu = og.generate_model_detector_responses(amp_cpu, ang_cpu, gw_frequency, gw_lifetime, detector_sampling_rate, gw_max_amps, number_amplitude_combinations, number_angular_samples)
+compare("model response", m_resp_cpu, m_resp_gpu)
+compare("model angles", m_ang_cpu, m_ang_gpu)
+
