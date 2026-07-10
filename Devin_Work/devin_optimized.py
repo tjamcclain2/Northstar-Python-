@@ -652,10 +652,13 @@ def get_best_fit_angles_deltas(real_detector_responses, real_angles_array,
     summed_angle_deltas = cp.sum(angle_deltas, axis=1)
     min_angle_idx = cp.argmin(summed_angle_deltas)
     sum_real_minimum_angle_deltas = cp.sum(cp.abs(real_angles_array[0] - model_angles_array[min_angle_idx]))
-    
+    s = cp.cuda.Event(); e = cp.cuda.Event()
+    s.record()
     response_deltas = cp.abs(real_detector_responses - model_detector_responses)
     summed_response_deltas = cp.sum(response_deltas, axis=(-1, -2))  # shape: (n_angles, n_amps)
-
+    e.record(); e.synchronize()
+    t = cp.cuda.get_elapsed_time(s,e)/1000
+    print(t)
     # 2. Single best fit: minimum total difference in detector responses
     def single_best_fit():
         min_response_idx = cp.unravel_index(cp.argmin(summed_response_deltas), summed_response_deltas.shape)
@@ -699,6 +702,9 @@ def run_northstar_pipeline(
     # calculating runtime on a perfectly warmed up GPU i.e runtime minus the context initialization cost.
     start.record()
     # Generate synthetic model and noisy real detector responses
+    s = cp.cuda.Event(); e = cp.cuda.Event()
+    s.record()
+
     model_responses, model_angles = generate_model_detector_responses(
         gw_frequency,
         gw_lifetime,
@@ -707,6 +713,9 @@ def run_northstar_pipeline(
         number_amplitude_combinations,
         number_angular_samples
     )
+    e.record(); e.synchronize()
+    t_model = cp.cuda.get_elapsed_time(s, e) / 1000
+    s.record()
 
     real_responses, real_angles = generate_real_detector_responses(
         gw_frequency,
@@ -717,14 +726,21 @@ def run_northstar_pipeline(
         number_angular_samples,
         max_noise_amp
     )
+    e.record(); e.synchronize()
+    t_real = cp.cuda.get_elapsed_time(s, e) / 1000
 
     # Run the angle comparison algorithms
+    s.record()
+
     deltas, single_func, weighted_func = get_best_fit_angles_deltas(
         real_responses,
         real_angles,
         model_responses,
         model_angles
     )
+    e.record(); e.synchronize()
+    t_bestfit = cp.cuda.get_elapsed_time(s, e) / 1000
+
     end.record()
     end.synchronize()  # ensure all GPU work is done before stopping the clock
     total_runtime = cp.cuda.get_elapsed_time(start,end)/1000
@@ -749,18 +765,25 @@ def run_northstar_pipeline(
         f"The full process run time (in seconds) was: {total_runtime:.6f}",
         f"The single best fit algorithm run time (in seconds) was: {best_fit_data[3]:.6f}",
         f"The weighted best fit algorithm run time (in seconds) was: {best_fit_data[4]:.6f}"
-    ]
+        ]
 
     # Print to terminal
     print("\n[Optimized Northstar Run Summary]")
     for line in results:
         print(line)
 
+    print("\n[Per-Stage GPU Time]")
+    print(f"  Model generation : {t_model:.4f} s")
+    print(f"  Real generation  : {t_real:.4f} s")
+    print(f"  Best-fit compare : {t_bestfit:.4f} s")
+    print(f"  {'-'*30}")
+    print(f"  Total            : {t_model + t_real + t_bestfit:.4f} s")
+
     # Write to file
 
-    with open(filename, "w") as f:
-        for line in results:
-            f.write(line + "\n")
+    # with open(filename, "w") as f:
+    #     for line in results:
+    #         f.write(line + "\n")
 
     print(f"\n[OK] Output also written to: {filename}")
 if __name__=="__main__":
