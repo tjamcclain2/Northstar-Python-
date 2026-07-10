@@ -755,11 +755,11 @@ def run_northstar_pipeline(
     detector_sampling_rate=LIGO_DETECTOR_SAMPLING_RATE,
     gw_max_amps=1,
     max_noise_amp=0.1,
-    number_angular_samples=100,
-    number_amplitude_combinations=100
+    number_angular_samples=500,
+    number_amplitude_combinations=500
 ):
     start_time = time.process_time()
-
+    np.random.seed(0)
     # Generate synthetic model and noisy real detector responses
     model_responses, model_angles = generate_model_detector_responses(
         gw_frequency,

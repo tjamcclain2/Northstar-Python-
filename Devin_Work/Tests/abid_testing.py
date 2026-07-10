@@ -10,9 +10,7 @@ Date: 2025-07-14
 
 import time
 import numpy as np
-import cupy as cp 
-from cupyx.profiler import benchmark
-DTYPE = cp.float32  # if needed to switch to fp64 
+
 # Constants (SI units unless noted otherwise)
 NUMBER_DETECTORS = 2
 NUMBER_GW_POLARIZATIONS = 2
@@ -26,31 +24,30 @@ WEIGHTING_POWER = 2
 
 # Helper to convert (deg, min, sec) to radians
 def dms_to_rad(deg, minutes, seconds):
-    return cp.deg2rad(deg + minutes / 60 + seconds / 3600)
+    return np.deg2rad(deg + minutes / 60 + seconds / 3600)
 
 # Detector angles: [latitude, longitude, orientation]
-hanford_detector_angles = cp.array([
+hanford_detector_angles = np.array([
     dms_to_rad(46, 27, 18.528),
     dms_to_rad(240, 35, 32.4343),
-    cp.deg2rad(125.9994) + cp.pi / 2
-], dtype=DTYPE)
+    np.deg2rad(125.9994) + np.pi / 2
+])
 
-livingston_detector_angles = cp.array([
+livingston_detector_angles = np.array([
     dms_to_rad(30, 33, 46.4196),
     dms_to_rad(269, 13, 32.7346),
-    cp.deg2rad(197.7165) + cp.pi / 2
-], dtype=DTYPE)
+    np.deg2rad(197.7165) + np.pi / 2
+])
 
 #=========================================================================
 
 # transforms rank-2 contravariant tensor under a change of basis
 def transform_2_0_tensor(matrix, change_basis_matrix) :
-    contravariant_transformation_matrix = cp.linalg.inv(change_basis_matrix)
-    partial_transformation = cp.einsum('...ki,...kl->...il', contravariant_transformation_matrix, matrix)
-    return cp.einsum('...lj,...il->...ij', contravariant_transformation_matrix, partial_transformation)
+    contravariant_transformation_matrix = np.linalg.inv(change_basis_matrix)
+    partial_transformation = np.einsum('ki,kl->il', contravariant_transformation_matrix, matrix)
+    return np.einsum('lj,il->ij', contravariant_transformation_matrix, partial_transformation)
 
 # transforms mixed tensor
-# Note: This is not used in the current code, but provided for completeness
 def transform_1_1_tensor(matrix, change_basis_matrix) :
     contravariant_transformation_matrix = np.linalg.inv(change_basis_matrix)
     partial_transformation = np.einsum('ik,kl->il', change_basis_matrix, matrix)
@@ -59,12 +56,12 @@ def transform_1_1_tensor(matrix, change_basis_matrix) :
 # transforms rank-2 covariant tensor under a change of basis
 # Note: This is not used in the current code, but provided for completeness
 def transform_0_2_tensor(matrix, change_basis_matrix) :
-    partial_transformation = cp.einsum('aik,akl->ail', change_basis_matrix, matrix)
-    return cp.einsum('ajl,ail->aij', change_basis_matrix, partial_transformation)
+    partial_transformation = np.einsum('ik,kl->il', change_basis_matrix, matrix)
+    return np.einsum('jl,il->ij', change_basis_matrix, partial_transformation)
 
 #=========================================================================
 
-def source_vector_from_angles(angle_grid) :
+def source_vector_from_angles(angles) :
     
     """
         Compute a Cartesian unit vector from spherical coordinates. This function takes a list with three angles in it -- either the declination, right ascension, and polarization angles of a gravitational wave source, or the latitute, longitude, and orientation a gravitational wave detector 
@@ -84,15 +81,13 @@ def source_vector_from_angles(angle_grid) :
             Unit-length vector in Cartesian (x, y, z) coordinates pointing from the Earth's center
             toward the specified direction.
     """
-    #[first, second, third] = angles
-    all_first = angle_grid[..., 0]
-    all_second = angle_grid[..., 1]
-    initial_source_vector = cp.array([cp.cos(all_first)*cp.cos(all_second), cp.cos(all_first)*cp.sin(all_second), cp.sin(all_first)], dtype=DTYPE).T # .T because we need (n_ang,3) 
-    return initial_source_vector # returns whole angle grid converted to source vector
+    [first, second, third] = angles
+    initial_source_vector = np.array([np.cos(first)*np.cos(second), np.cos(first)*np.sin(second), np.sin(first)])
+    return initial_source_vector
 
 #=========================================================================
 
-def change_basis_gw_to_ec(angle_grid) :
+def change_basis_gw_to_ec(source_angles) :
     
     """
         Compute the covariant change-of-basis matrix from the gravitational-wave frame to the Earth-centered frame. This function takes a list with the declination, right ascension, and polarization angles of a gravitational wave source in the Earth-centered 
@@ -114,46 +109,75 @@ def change_basis_gw_to_ec(angle_grid) :
             Covariant transformation matrix that, when applied to a vector expressed in the
             gravitational-wave frame, yields its components in the Earth-centered frame.
     """
-    initial_source_vector = source_vector_from_angles(angle_grid)
+
+    [declination, right_ascension, polarization] = source_angles
+    initial_source_vector = source_vector_from_angles(source_angles)
     initial_gw_z_vector_earth_centered = -1 * initial_source_vector
-    all_declination = angle_grid[...,0]
-    all_right_ascension = angle_grid[...,1]
-    all_polarization = angle_grid[...,2]
-    initial_gw_y_vector_earth_centered = cp.array([
-            -cp.sin(all_declination) * cp.cos(all_right_ascension),
-            -cp.sin(all_declination) * cp.sin(all_right_ascension),
-            cp.cos(all_declination) 
-        ], dtype=DTYPE).T  # .T because we need (n_ang,3)
-    initial_gw_x_vector_earth_centered = cp.cross(
+    initial_gw_y_vector_earth_centered = np.array([
+            -np.sin(declination) * np.cos(right_ascension),
+            -np.sin(declination) * np.sin(right_ascension),
+            np.cos(declination)
+        ])
+    initial_gw_x_vector_earth_centered = np.cross(
             initial_gw_z_vector_earth_centered,
-            initial_gw_y_vector_earth_centered,
-            axis=1)
-    # stack (with -1) adds a new axis at the end which makes it (angles, component, which_vector) (n,3,3) 
-    initial_gw_vecs_ec = cp.stack([
+            initial_gw_y_vector_earth_centered
+        )
+
+    initial_gw_vecs_ec = np.vstack([
             initial_gw_x_vector_earth_centered,
             initial_gw_y_vector_earth_centered,
             initial_gw_z_vector_earth_centered
-        ], axis=-1)
+        ]).T
         # Rotate by polarization about z_gw
-    cos_p = cp.cos(all_polarization)
-    sin_p = cp.sin(all_polarization)
-    # Create 1D tracking arrays filled with 0s and 1s matching the length of n_ang
-    zeros = cp.zeros_like(all_polarization)
-    ones = cp.ones_like(all_polarization)
-    
-    polarization_rotation_matrices = cp.array([
-            [cos_p, -sin_p, zeros],
-            [sin_p,  cos_p, zeros],
-            [zeros,  zeros,  ones]
-        ], dtype=DTYPE)
-    # to get the shape (n_ang, 3, 3) so that the matmul can be applied to the 3x3 matrix
-    polarization_rotation_matrices = cp.transpose(polarization_rotation_matrices, (2,0,1))
-
-    contravariant_transformation_matrices = polarization_rotation_matrices @ initial_gw_vecs_ec
-    change_basis_matrices = cp.linalg.inv(contravariant_transformation_matrices)
-    return change_basis_matrices
+    polarization_rotation_matrix = np.array([
+            [np.cos(polarization), -np.sin(polarization), 0],
+            [np.sin(polarization),  np.cos(polarization), 0],
+            [0,                    0,                     1]
+        ])
+    contravariant_transformation_matrix = polarization_rotation_matrix @ initial_gw_vecs_ec
+    change_basis_matrix = np.linalg.inv(contravariant_transformation_matrix)
+    return change_basis_matrix
 
 #=========================================================================
+
+
+def gravitational_wave_ec_frame(source_angles,tt_amplitudes) :
+    
+    """
+    Compute the gravitational-wave strain tensor in Earth-centered coordinates. This function takes two lists -- the first containing the declination, right ascension, and polarization angles of the source, the second containing the "plus" and "cross" strain amplitudes of 
+    the gravitational wave in the transverse, traceless ("TT") gauge of the gravitational wave frame -- and returns a NumPy array characterizing the gravitational wave's strain amplitudes in 
+    the Earth-centered frame. Note that the strain tensor is a (0-2) tensor.
+    
+    Parameters
+    ----------
+    source_angles : array-like of float, shape (3,)
+        Three angles (in radians) defining the source orientation in Earth-centered frame:
+        - declination δ
+        - right ascension α
+        - polarization ψ
+    tt_amplitudes : array-like of float, shape (2,)
+        Transverse-traceless ("TT") strain amplitudes in the GW frame:
+        - h_plus (h₊)
+        - h_cross (hₓ)
+
+    Returns
+    -------
+    strain_ec : ndarray of float, shape (3, 3)
+        The (0,2) GW strain tensor components expressed in Earth-centered coordinates.
+    
+    """
+    # Changed variable names for readability
+    h_plus, h_cross = tt_amplitudes
+    gw_tt = np.array([
+        [h_plus,  h_cross, 0],
+        [h_cross, -h_plus, 0],
+        [0,       0,       0]
+    ])
+    change_mat = change_basis_gw_to_ec(source_angles)
+    return transform_0_2_tensor(gw_tt, change_mat)
+
+#=========================================================================
+
 
 def change_basis_detector_to_ec(detector_angles) :
     
@@ -185,31 +209,86 @@ def change_basis_detector_to_ec(detector_angles) :
     z_det_ec = source_vector_from_angles(detector_angles)
 
     # x̂_det is tangent eastward
-    x_det_ec = cp.array([-cp.sin(longitude), cp.cos(longitude), cp.array(0.0)], dtype=DTYPE) # array because 0-d array and python float mismatch
+    x_det_ec = np.array([-np.sin(longitude), np.cos(longitude), 0.0])
 
     # ŷ_det completes right-handed set
-    y_det_ec = cp.cross(z_det_ec, x_det_ec)
+    y_det_ec = np.cross(z_det_ec, x_det_ec)
 
     # Stack as columns to form the GW-frame basis matrix in EC coords
-    det_vecs_ec = cp.vstack([x_det_ec, y_det_ec, z_det_ec]).T
-
+    det_vecs_ec = np.vstack([x_det_ec, y_det_ec, z_det_ec]).T
 
     # Rotate about local vertical (z_det_ec) by orientation γ
-    orientation_rotation = cp.array([
-        [cp.cos(orientation), -cp.sin(orientation),  cp.array(0.0)],
-        [cp.sin(orientation),  cp.cos(orientation),  cp.array(0.0)],
-        [cp.array(0.0),              cp.array(0.0),  cp.array(1.0)]
-    ], dtype=DTYPE)
+    orientation_rotation = np.array([
+        [np.cos(orientation), -np.sin(orientation), 0.0],
+        [np.sin(orientation),  np.cos(orientation), 0.0],
+        [0.0,                  0.0,                 1.0]
+    ])
 
     T_contravariant = orientation_rotation @ det_vecs_ec
     
     # Directly inverted the contravariant matrix in one line
-    change_basis_matrix = cp.linalg.inv(T_contravariant)
+    change_basis_matrix = np.linalg.inv(T_contravariant)
     return change_basis_matrix
+    
 
 #=========================================================================
 
-def beam_pattern_response_functions(detector_angles, angle_grid) :
+def detector_response(detector_angles, source_angles, tt_amplitudes) :
+    
+    """
+    Compute the scalar strain measured by a gravitational-wave detector. This function takes three lists -- the first containing the latitude, longitude, and orientation angles of a gravitational wave detector, 
+    the second containing the declination, right ascension, and polarization angles of the source, and the third containing the "plus" and "cross" 
+    strain amplitudes of the gravitational wave in the transverse, traceless ("TT") gauge -- and returns a scalar representing the strain measured by the gravitational wave detector. 
+    Note that the detector response tensor is a (2-0) tensor.
+
+    Parameters
+    ----------
+    detector_angles : array-like of float, shape (3,)
+        Detector orientation in Earth-centered coordinates (radians):
+        - latitude θ
+        - longitude ϕ
+        - orientation γ (rotation about local vertical)
+    source_angles : array-like of float, shape (3,)
+        Source orientation in Earth-centered coordinates (radians):
+        - declination δ
+        - right ascension α
+        - polarization ψ
+    tt_amplitudes : array-like of float, shape (2,)
+        Transverse-traceless strain amplitudes in GW frame:
+        - h₊ (plus)
+        - hₓ (cross)
+
+    Returns
+    -------
+    response : float
+        Scalar detector response: the double contraction of the Earth-frame
+        GW strain tensor with the detector’s response tensor.
+    """
+    # Detector-frame response tensor (2-0)
+    D_det = np.array([
+        [0.5,  0.0, 0.0],
+        [0.0, -0.5, 0.0],
+        [0.0,  0.0, 0.0]
+    ])
+
+    # Covariant change-of-basis matrix for detector → Earth-centered
+    R_det_ec = change_basis_detector_to_ec(detector_angles)
+
+    # Transform detector response tensor into Earth-centered frame
+    D_ec = transform_2_0_tensor(D_det, R_det_ec)
+
+    # Get GW strain tensor in Earth-centered frame
+    h_ec = gravitational_wave_ec_frame(source_angles, tt_amplitudes)
+
+    # Double contraction over both tensor indices → scalar
+    return np.tensordot(h_ec, D_ec, axes=([0, 1], [0, 1]))
+
+
+#=========================================================================
+
+
+
+def beam_pattern_response_functions(detector_angles,source_angles) :
     """
     Compute the beam-pattern (antenna-pattern) response functions F₊ and Fₓ for a gravitational-wave detector. This function takes two lists -- the first containing the latitude, 
     longitude, and orientation angles of a gravitational wave detector, and the second containing the declination, right ascensions, 
@@ -238,31 +317,31 @@ def beam_pattern_response_functions(detector_angles, angle_grid) :
     """
     
     # Detector‐frame response tensor (2-0)
-    arm_response_tensor = cp.array([
+    D_det = np.array([
         [0.5,  0.0, 0.0],
         [0.0, -0.5, 0.0],
         [0.0,  0.0, 0.0]
-    ], dtype=DTYPE)
+    ])
 
     # Change-of-basis: detector frame → Earth-centered
-    det_to_ec_basis = change_basis_detector_to_ec(detector_angles)
-    arm_response_tensor_ec = transform_2_0_tensor(arm_response_tensor, det_to_ec_basis)
+    R_det_ec = change_basis_detector_to_ec(detector_angles)
+    D_ec    = transform_2_0_tensor(D_det, R_det_ec)
 
     # Change-of-basis: Earth-centered → GW frame
-    gw_to_ec_basis = change_basis_gw_to_ec(angle_grid)
-    ec_to_gw_basis = cp.linalg.inv(gw_to_ec_basis)
-    arm_response_tensor_gw = transform_2_0_tensor(arm_response_tensor_ec, ec_to_gw_basis) #cupy ndarray of size(n_ang, 3, 3)
+    R_gw_ec = change_basis_gw_to_ec(source_angles)
+    R_ec_gw = np.linalg.inv(R_gw_ec)
+    D_gw    = transform_2_0_tensor(D_ec, R_ec_gw)
 
     # Extract plus and cross responses
-    F_plus  = arm_response_tensor_gw[:, 0, 0] - arm_response_tensor_gw[:, 1, 1]
-    F_cross = arm_response_tensor_gw[:, 0, 1] + arm_response_tensor_gw[:, 1, 0]
+    F_plus  = D_gw[0, 0] - D_gw[1, 1]
+    F_cross = D_gw[0, 1] + D_gw[1, 0]
 
     return F_plus, F_cross
     
 
 #=========================================================================
 
-def time_delay_hanford_to_livingston(angle_grid) :
+def time_delay_hanford_to_livingston(source_angles) :
     
     """
     Compute the gravitational-wave arrival time delay between the Hanford and Livingston detectors. This function take a list of the declination, right ascension, 
@@ -293,10 +372,10 @@ def time_delay_hanford_to_livingston(angle_grid) :
     baseline = r_L - r_H
 
     # GW propagation direction (unit vector) in Earth frame
-    propagation_dir = -source_vector_from_angles(angle_grid) # (n_ang, 3)
+    propagation_dir = -source_vector_from_angles(source_angles)
 
     # Return time delay (s)
-    return cp.dot(propagation_dir, baseline) / SPEED_OF_LIGHT
+    return np.dot(propagation_dir, baseline) / SPEED_OF_LIGHT
 
 #=========================================================================
 
@@ -326,15 +405,16 @@ def generate_network_time_array(signal_lifetime, detector_sampling_rate, maximum
         sampled at 1/detector_sampling_rate intervals.
 
     """
-
+            
     # Total half-window in seconds
     T_max = signal_lifetime + maximum_time_delay
 
     # Number of samples on each side of zero
-    half_samples = int(cp.ceil(T_max * detector_sampling_rate))
+    half_samples = int(np.ceil(T_max * detector_sampling_rate))
 
     # Generate symmetric time array around zero
-    time_array = (cp.arange(-half_samples, half_samples) / detector_sampling_rate).astype(DTYPE)
+    time_array = np.arange(-half_samples, half_samples) / detector_sampling_rate
+
     return time_array
 
 #=========================================================================
@@ -369,33 +449,22 @@ def generate_oscillatory_terms(signal_lifetime, signal_frequency, time_array, ti
     """
     
     # Gaussian Q-factor
-    Q = (cp.sqrt(cp.log(2)) / signal_lifetime).astype(DTYPE)
+    Q = np.sqrt(np.log(2)) / signal_lifetime
 
     # Time relative to arrival at this detector
-    time_delay = cp.atleast_1d(time_delay).astype(DTYPE)
-    dt = time_array[cp.newaxis, :] - time_delay[:, cp.newaxis] # dt = (n_ang, n_times)
-    
+    dt = time_array - time_delay
+
     # Envelope and phase arrays
-    envelope = cp.exp(-Q**2 * dt**2)
-    phase    = 2 * cp.pi * signal_frequency * dt 
+    envelope = np.exp(-Q**2 * dt**2)
+    phase    = 2 * np.pi * signal_frequency * dt
 
     # Cosine- and sine-modulated terms
-    A_plus = envelope * cp.cos(phase)
-    B_cross = envelope * cp.sin(phase)
+    A_plus = envelope * np.cos(phase)
+    B_cross = envelope * np.sin(phase)
 
     # Stack into (N,4) for the four modes [A₊, Bₓ, A₊, Bₓ]
-    oscillatory_terms = cp.stack([A_plus, B_cross, A_plus, B_cross], axis=-1)
-    '''
-    (n_ang, n_times, 4)
-    time 0:
-    angle0: [a00, b00, a00, b00]   ← the 4 modes, cleanly grouped
-    angle1: [a01, b01, a01, b01]
-    angle2: [a02, b02, a02, b02]
-    time 1:
-    angle0: [a10, b10, a10, b10]
-    angle1: [a11, b11, a11, b11]
-    angle2: [a12, b12, a12, b12]
-    '''
+    oscillatory_terms = np.column_stack([A_plus, B_cross, A_plus, B_cross])
+
     return oscillatory_terms
 
 #=========================================================================
@@ -423,11 +492,11 @@ def generate_model_angles_array(number_angular_samples) :
     """
     
     # Declinations: uniform in [–π/2, π/2]
-    dec = ((cp.random.rand(number_angular_samples) - 0.5) * cp.pi).astype(DTYPE)
+    dec = (np.random.rand(number_angular_samples) - 0.5) * np.pi
     # Right ascension & polarization: uniform in [0, 2π)
-    ra_psi = (cp.random.rand(number_angular_samples, 2) * 2 * cp.pi).astype(DTYPE)
+    ra_psi = np.random.rand(number_angular_samples, 2) * 2 * np.pi
     # Stack into shape (N, 3)
-    angle_grid = cp.column_stack((dec, ra_psi))
+    angle_grid = np.column_stack((dec, ra_psi))
     return angle_grid
 
 #=========================================================================
@@ -447,16 +516,17 @@ def generate_model_amplitudes_array(number_amplitude_combinations, gw_max_amps) 
                     where each row is a random amplitude vector [A_+, B_x, A_+, B_x],
                     with each component sampled uniformly from [0, gw_max_amps).
     """
-    return (cp.random.rand(number_amplitude_combinations, NUMBER_GW_MODES) * gw_max_amps).astype(DTYPE)
+    return np.random.rand(number_amplitude_combinations, NUMBER_GW_MODES) * gw_max_amps
 
 
 #=========================================================================
 
 def generate_model_detector_responses(
+    amplitude_grid,
+    angle_grid,
     signal_frequency,
     signal_lifetime,
     detector_sampling_rate,
-    gw_max_amps,
     number_amplitude_combinations,
     number_angular_samples,
 ):
@@ -508,32 +578,36 @@ def generate_model_detector_responses(
     )
 
     # Generate model amplitude and angle grids
-    amplitude_grid = generate_model_amplitudes_array(n_amp, gw_max_amps)  # shape (n_amp, 4) (100,4)
-    angle_grid = generate_model_angles_array(n_ang)                     # shape (n_ang, 3) (100,3)
+    # amplitude_grid = generate_model_amplitudes_array(n_amp, gw_max_amps)  # shape (n_amp, 4)
+    # angle_grid = generate_model_angles_array(n_ang)                     # shape (n_ang, 3)
 
     # Initialize output array: detectors=2 (0=H1, 1=L1)
-    responses = cp.empty((n_ang, n_amp, n_times, 2), dtype=DTYPE)
+    responses = np.empty((n_ang, n_amp, n_times, 2))
 
-    Fp_H, Fx_H = beam_pattern_response_functions(hanford_detector_angles, angle_grid)  
-    Fp_L, Fx_L = beam_pattern_response_functions(livingston_detector_angles, angle_grid)
-    pattern_H = cp.array([Fp_H, Fx_H, Fp_H, Fx_H]).T  # (n_ang, 4)
-    weighted_H = hanford_terms * pattern_H[:, cp.newaxis, :] 
-    delay_L = time_delay_hanford_to_livingston(angle_grid)
-    liv_terms = generate_oscillatory_terms(
+    # Loop over angle sets
+    for i_ang, angles in enumerate(angle_grid):
+        # Beam patterns for Hanford & Livingston
+        Fp_H, Fx_H = beam_pattern_response_functions(hanford_detector_angles, angles)
+        Fp_L, Fx_L = beam_pattern_response_functions(livingston_detector_angles, angles)
+
+        # Weight Hanford oscillatory terms: shape (n_times, 4)
+        pattern_H = np.array([Fp_H, Fx_H, Fp_H, Fx_H])
+        weighted_H = hanford_terms * pattern_H[np.newaxis, :]
+
+        # Compute Livingston oscillatory terms with its time delay
+        delay_L = time_delay_hanford_to_livingston(angles)
+        liv_terms = generate_oscillatory_terms(
             signal_lifetime, signal_frequency, time_array, delay_L
-        )   
-    pattern_L = cp.array([Fp_L, Fx_L, Fp_L, Fx_L]).T # (n_ang, 4)
-    weighted_L = liv_terms * pattern_L[:, cp.newaxis, :]
+        )
+        pattern_L = np.array([Fp_L, Fx_L, Fp_L, Fx_L])
+        weighted_L = liv_terms * pattern_L[np.newaxis, :]
 
-    # einsum
-    '''
-        weighted_H.shape = (n_ang, n_times, 4)
-        amplitude_grid.shape = (n_amplitudes, 4) 
-        needed shape = (n_ang, n_amp, n_times)
-        # computes all (weighted_H @ amps) at once instead of looping
-    '''
-    responses[:, :, :, 0] = cp.einsum('atm,pm->apt', weighted_H, amplitude_grid)
-    responses[:, :, :, 1] = cp.einsum('atm,pm->apt', weighted_L, amplitude_grid)
+        # Loop over amplitude combinations and vector-dot over modes
+        for j_amp, amps in enumerate(amplitude_grid):
+            # responses for Hanford (detector 0) and Livingston (detector 1)
+            responses[i_ang, j_amp, :, 0] = weighted_H @ amps
+            responses[i_ang, j_amp, :, 1] = weighted_L @ amps
+
     return responses, angle_grid
 
 
@@ -554,16 +628,18 @@ def generate_noise_array(max_noise_amp,number_time_samples) :
                     uniformly distributed random noise values in the range [0, max_noise_amp).
     """
     
-    noise_array = (cp.random.rand(number_time_samples)*max_noise_amp).astype(DTYPE)
+    noise_array = np.random.rand(number_time_samples)*max_noise_amp
     return noise_array
 
 #=========================================================================
 
 def generate_real_detector_responses(
+        real_amplitudes,
+        real_angles,
         signal_frequency,
         signal_lifetime,
         detector_sampling_rate,
-        gw_max_amps, number_amplitude_combinations,
+        number_amplitude_combinations,
         number_angular_samples, 
         max_noise_amp
         ):
@@ -578,51 +654,50 @@ def generate_real_detector_responses(
     # 1. Setup
     time_array = generate_network_time_array(signal_lifetime, detector_sampling_rate, MAX_HANFORD_LIVINGSTON_DELAY)
     number_time_samples = time_array.size
-    print("time_array:", time_array.dtype)
+
     # 2. Sample 1 true amplitude and angle
-    real_amplitudes = generate_model_amplitudes_array(1, gw_max_amps)[0]
-    real_angles = generate_model_angles_array(1)[0] # returns (3,)
-    real_angle_batch = real_angles[cp.newaxis, :] # makes it (1,3)
+    # real_amplitudes = generate_model_amplitudes_array(1, gw_max_amps)[0]
+    # real_angles = generate_model_angles_array(1)[0]
 
     # 3. Detector beam pattern responses
-    fplus_hanford, fcross_hanford = beam_pattern_response_functions(hanford_detector_angles, real_angle_batch)
-    fplus_livingston, fcross_livingston = beam_pattern_response_functions(livingston_detector_angles, real_angle_batch)
+    fplus_hanford, fcross_hanford = beam_pattern_response_functions(hanford_detector_angles, real_angles)
+    fplus_livingston, fcross_livingston = beam_pattern_response_functions(livingston_detector_angles, real_angles)
 
     # 4. Time delay and oscillatory terms
     time_delay = time_delay_hanford_to_livingston(real_angles)
-    osc_hanford = generate_oscillatory_terms(signal_lifetime, signal_frequency, time_array, 0) # (1, n_times, 4)
+    osc_hanford = generate_oscillatory_terms(signal_lifetime, signal_frequency, time_array, 0)
     osc_livingston = generate_oscillatory_terms(signal_lifetime, signal_frequency, time_array, time_delay)
-    osc_hanford = cp.squeeze(osc_hanford, axis=0)
-    osc_livingston = cp.squeeze(osc_livingston, axis=0)
 
     # 5. Noise arrays
     noise_h = generate_noise_array(max_noise_amp, number_time_samples)
     noise_l = generate_noise_array(max_noise_amp, number_time_samples)
-    # 6. Combine signal + noise for both detectors using broadcasting
-    weights_h = cp.array([fplus_hanford[0], fcross_hanford[0], fplus_hanford[0], fcross_hanford[0]]) # (4,)
-    weights_l = cp.array([fplus_livingston[0], fcross_livingston[0], fplus_livingston[0], fcross_livingston[0]]) 
 
-    signal_h = cp.dot(osc_hanford * weights_h, real_amplitudes) # (n_times,)
-    signal_l = cp.dot(osc_livingston * weights_l, real_amplitudes)
-    print("osc_h:", osc_hanford.dtype, "weights_h:", weights_h.dtype, "signal_h:", signal_h.dtype)
+    # 6. Combine signal + noise for both detectors using broadcasting
+    weights_h = np.array([fplus_hanford, fcross_hanford, fplus_hanford, fcross_hanford])
+    weights_l = np.array([fplus_livingston, fcross_livingston, fplus_livingston, fcross_livingston])
+
+    signal_h = np.dot(osc_hanford * weights_h, real_amplitudes)
+    signal_l = np.dot(osc_livingston * weights_l, real_amplitudes)
 
     # Shape: (time_samples, detectors)
-    small_response = cp.stack([signal_h + noise_h, signal_l + noise_l], axis=1)
+    small_response = np.stack([signal_h + noise_h, signal_l + noise_l], axis=1)
 
     # 7. Efficient duplication using broadcasting
-    real_detector_response_array = cp.broadcast_to(
-        small_response[cp.newaxis, cp.newaxis, :, :],
+    real_detector_response_array = np.broadcast_to(
+        small_response[None, None, :, :],
         (number_angular_samples, number_amplitude_combinations, number_time_samples, NUMBER_DETECTORS)
-    )
+    ).copy()
 
-    real_angles_array = cp.broadcast_to(
-        cp.array(real_angles)[None, :],
+    real_angles_array = np.broadcast_to(
+        real_angles[None, :],
         (number_angular_samples, NUMBER_SOURCE_ANGLES)
-    )
+    ).copy()
 
     return real_detector_response_array, real_angles_array 
 
+
 #=========================================================================
+
 def get_best_fit_angles_deltas(real_detector_responses, real_angles_array,
                                 model_detector_responses, model_angles_array):
     """
@@ -647,44 +722,38 @@ def get_best_fit_angles_deltas(real_detector_responses, real_angles_array,
         ]
     """
     # 1. Oracle best: angle delta to closest model angle
-    model_angles_array = cp.array(model_angles_array)
-    angle_deltas = cp.abs(real_angles_array[0] - model_angles_array)
-    summed_angle_deltas = cp.sum(angle_deltas, axis=1)
-    min_angle_idx = cp.argmin(summed_angle_deltas)
-    sum_real_minimum_angle_deltas = cp.sum(cp.abs(real_angles_array[0] - model_angles_array[min_angle_idx]))
-    s = cp.cuda.Event(); e = cp.cuda.Event()
-    s.record()
-    response_deltas = cp.abs(real_detector_responses - model_detector_responses)
-    summed_response_deltas = cp.sum(response_deltas, axis=(-1, -2))  # shape: (n_angles, n_amps)
-    e.record(); e.synchronize()
-    t = cp.cuda.get_elapsed_time(s,e)/1000
-    print(t)
-    # 2. Single best fit: minimum total difference in detector responses
-    def single_best_fit():
-        min_response_idx = cp.unravel_index(cp.argmin(summed_response_deltas), summed_response_deltas.shape)
-        best_fit_angles = model_angles_array[min_response_idx[0]]
-        return cp.sum(cp.abs(real_angles_array[0] - best_fit_angles))
-   
-    sum_real_minimum_response_angle_deltas = single_best_fit()
-   
-    # 3. Weighted best fit
-    def weighted_best_fit():
-        fractional_deltas = summed_response_deltas / cp.min(summed_response_deltas)
-        weights = cp.exp(1 - fractional_deltas**WEIGHTING_POWER)
-        summed_weights = cp.sum(weights, axis=1)
-        weighted_idx = cp.argmax(summed_weights)
-        weighted_angles = model_angles_array[weighted_idx]
-        return cp.sum(cp.abs(real_angles_array[0] - weighted_angles))
+    angle_deltas = np.abs(real_angles_array[0] - model_angles_array)
+    summed_angle_deltas = np.sum(angle_deltas, axis=1)
+    min_angle_idx = np.argmin(summed_angle_deltas)
+    sum_real_minimum_angle_deltas = np.sum(np.abs(real_angles_array[0] - model_angles_array[min_angle_idx]))
 
-    sum_real_maximum_weighted_response_angle_deltas = weighted_best_fit()
-    deltas = [
+    # 2. Single best fit: minimum total difference in detector responses
+    t_start = time.process_time()
+    response_deltas = np.abs(real_detector_responses - model_detector_responses)
+    summed_response_deltas = np.sum(response_deltas, axis=(-1, -2))  # shape: (n_angles, n_amps)
+    min_response_idx = np.unravel_index(np.argmin(summed_response_deltas), summed_response_deltas.shape)
+    best_fit_angles = model_angles_array[min_response_idx[0]]
+    sum_real_minimum_response_angle_deltas = np.sum(np.abs(real_angles_array[0] - best_fit_angles))
+    t_single_fit = time.process_time() - t_start
+
+    # 3. Weighted best fit
+    t_start = time.process_time()
+    fractional_deltas = summed_response_deltas / np.min(summed_response_deltas)
+    weights = np.exp(1 - fractional_deltas**WEIGHTING_POWER)
+    summed_weights = np.sum(weights, axis=1)
+    weighted_idx = np.argmax(summed_weights)
+    weighted_angles = model_angles_array[weighted_idx]
+    sum_real_maximum_weighted_response_angle_deltas = np.sum(np.abs(real_angles_array[0] - weighted_angles))
+    t_weighted_fit = time.process_time() - t_start
+
+    return [
         sum_real_minimum_angle_deltas,
         sum_real_minimum_response_angle_deltas,
-        sum_real_maximum_weighted_response_angle_deltas
-        ]
-    return [
-        deltas, single_best_fit, weighted_best_fit
+        sum_real_maximum_weighted_response_angle_deltas,
+        t_single_fit,
+        t_weighted_fit
     ]
+
 
 #========================================================================= START OF DRIVER FUNCTIONS =========================================================================
 
@@ -694,18 +763,12 @@ def run_northstar_pipeline(
     detector_sampling_rate=LIGO_DETECTOR_SAMPLING_RATE,
     gw_max_amps=1,
     max_noise_amp=0.1,
-    number_angular_samples=500,
-    number_amplitude_combinations=500
+    number_angular_samples=100,
+    number_amplitude_combinations=100
 ):
-    cp.random.seed(0)
-    start = cp.cuda.Event()
-    end = cp.cuda.Event()
-    # calculating runtime on a perfectly warmed up GPU i.e runtime minus the context initialization cost.
-    start.record()
-    # Generate synthetic model and noisy real detector responses
-    s = cp.cuda.Event(); e = cp.cuda.Event()
-    s.record()
+    start_time = time.process_time()
 
+    # Generate synthetic model and noisy real detector responses
     model_responses, model_angles = generate_model_detector_responses(
         gw_frequency,
         gw_lifetime,
@@ -714,9 +777,6 @@ def run_northstar_pipeline(
         number_amplitude_combinations,
         number_angular_samples
     )
-    e.record(); e.synchronize()
-    t_model = cp.cuda.get_elapsed_time(s, e) / 1000
-    s.record()
 
     real_responses, real_angles = generate_real_detector_responses(
         gw_frequency,
@@ -727,33 +787,18 @@ def run_northstar_pipeline(
         number_angular_samples,
         max_noise_amp
     )
-    e.record(); e.synchronize()
-    t_real = cp.cuda.get_elapsed_time(s, e) / 1000
 
     # Run the angle comparison algorithms
-    s.record()
-    print("real:", real_responses.dtype, "model:", model_responses.dtype)
-    deltas, single_func, weighted_func = get_best_fit_angles_deltas(
+    best_fit_data = get_best_fit_angles_deltas(
         real_responses,
         real_angles,
         model_responses,
         model_angles
     )
-    e.record(); e.synchronize()
-    t_bestfit = cp.cuda.get_elapsed_time(s, e) / 1000
 
-    end.record()
-    end.synchronize()  # ensure all GPU work is done before stopping the clock
-    total_runtime = cp.cuda.get_elapsed_time(start,end)/1000
-    bench_single = benchmark(single_func, (), n_repeat=50, n_warmup=10)
-    bench_weighted = benchmark(weighted_func, (), n_repeat=50, n_warmup=10)
-    t_single_fit = (bench_single.gpu_times.mean())
-    t_weighted_fit = (bench_weighted.gpu_times.mean())
-    best_fit_data = [
-        deltas[0], deltas[1], deltas[2],
-        t_single_fit,
-        t_weighted_fit,
-    ]
+    end_time = time.process_time()
+    total_runtime = end_time - start_time
+
     # Create a human-readable timestamped filename
     timestamp = time.strftime("%d_%b_%Y_%H-%M-%S")
     filename = f"OPTIMIZED_northstar_output_{timestamp}.txt"
@@ -763,31 +808,21 @@ def run_northstar_pipeline(
         f"The best possible fit angle delta (in radians) was: {best_fit_data[0]:.6f}",
         f"The single best fit algorithm angle delta (in radians) was: {best_fit_data[1]:.6f}",
         f"The weighted best fit algorithm angle delta (in radians) was: {best_fit_data[2]:.6f}",
-        f"The full process run time (in seconds) was: {total_runtime:.6f}",
-        f"The single best fit algorithm run time (in seconds) was: {best_fit_data[3]:.6f}",
-        f"The weighted best fit algorithm run time (in seconds) was: {best_fit_data[4]:.6f}"
-        ]
+        f"The full process run time (in seconds) was: {total_runtime:.4f}",
+        f"The single best fit algorithm run time (in seconds) was: {best_fit_data[3]:.4f}",
+        f"The weighted best fit algorithm run time (in seconds) was: {best_fit_data[4]:.4f}"
+    ]
 
     # Print to terminal
     print("\n[Optimized Northstar Run Summary]")
     for line in results:
         print(line)
 
-    print("\n[Per-Stage GPU Time]")
-    print(f"  Model generation : {t_model:.4f} s")
-    print(f"  Real generation  : {t_real:.4f} s")
-    print(f"  Best-fit compare : {t_bestfit:.4f} s")
-    print(f"  {'-'*30}")
-    print(f"  Total            : {t_model + t_real + t_bestfit:.4f} s")
-
     # Write to file
+    with open(filename, "w") as f:
+        for line in results:
+            f.write(line + "\n")
 
-    # with open(filename, "w") as f:
-    #     for line in results:
-    #         f.write(line + "\n")
-
-    print(f"\n[OK] Output also written to: {filename}")
-if __name__=="__main__":
+    print(f"\n[✔] Output also written to: {filename}")
+if __name__ == "__main__":
     run_northstar_pipeline()
-
-#LATEST
