@@ -522,10 +522,11 @@ def generate_model_amplitudes_array(number_amplitude_combinations, gw_max_amps) 
 #=========================================================================
 
 def generate_model_detector_responses(
+    amplitude_grid,
+    angle_grid,
     signal_frequency,
     signal_lifetime,
     detector_sampling_rate,
-    gw_max_amps,
     number_amplitude_combinations,
     number_angular_samples,
 ):
@@ -577,8 +578,8 @@ def generate_model_detector_responses(
     )
 
     # Generate model amplitude and angle grids
-    amplitude_grid = generate_model_amplitudes_array(n_amp, gw_max_amps)  # shape (n_amp, 4)
-    angle_grid = generate_model_angles_array(n_ang)                     # shape (n_ang, 3)
+    # amplitude_grid = generate_model_amplitudes_array(n_amp, gw_max_amps)  # shape (n_amp, 4)
+    # angle_grid = generate_model_angles_array(n_ang)                     # shape (n_ang, 3)
 
     # Initialize output array: detectors=2 (0=H1, 1=L1)
     responses = np.empty((n_ang, n_amp, n_times, 2))
@@ -632,9 +633,16 @@ def generate_noise_array(max_noise_amp,number_time_samples) :
 
 #=========================================================================
 
-def generate_real_detector_responses(signal_frequency, signal_lifetime, detector_sampling_rate,
-                                     gw_max_amps, number_amplitude_combinations,
-                                     number_angular_samples, max_noise_amp):
+def generate_real_detector_responses(
+        real_amplitudes,
+        real_angles,
+        signal_frequency,
+        signal_lifetime,
+        detector_sampling_rate,
+        number_amplitude_combinations,
+        number_angular_samples, 
+        max_noise_amp
+        ):
     """
     Efficiently generates a simulated detector response for one gravitational wave signal,
     duplicating it across model parameter combinations to match later processing.
@@ -648,8 +656,8 @@ def generate_real_detector_responses(signal_frequency, signal_lifetime, detector
     number_time_samples = time_array.size
 
     # 2. Sample 1 true amplitude and angle
-    real_amplitudes = generate_model_amplitudes_array(1, gw_max_amps)[0]
-    real_angles = generate_model_angles_array(1)[0]
+    # real_amplitudes = generate_model_amplitudes_array(1, gw_max_amps)[0]
+    # real_angles = generate_model_angles_array(1)[0]
 
     # 3. Detector beam pattern responses
     fplus_hanford, fcross_hanford = beam_pattern_response_functions(hanford_detector_angles, real_angles)
@@ -755,11 +763,11 @@ def run_northstar_pipeline(
     detector_sampling_rate=LIGO_DETECTOR_SAMPLING_RATE,
     gw_max_amps=1,
     max_noise_amp=0.1,
-    number_angular_samples=500,
-    number_amplitude_combinations=500
+    number_angular_samples=100,
+    number_amplitude_combinations=100
 ):
     start_time = time.process_time()
-    np.random.seed(0)
+
     # Generate synthetic model and noisy real detector responses
     model_responses, model_angles = generate_model_detector_responses(
         gw_frequency,

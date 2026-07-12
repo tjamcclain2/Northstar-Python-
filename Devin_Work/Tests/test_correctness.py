@@ -1,20 +1,9 @@
 import numpy as np
 import cupy as cp
-import devin_optimized as op
-import northstar_og_abid as og
-"""
-Correctness harness: compares devin_optimized against northstar_og_abid.
+import Devin_Work.Tests.devin_optimized_testing as op
+import Devin_Work.Tests.abid_testing as og
 
-PREREQUISITE — before running, the two pipeline functions must accept
-injected inputs. They generate grids internally by default, so to test:
-  1. In BOTH devin_optimized.py and northstar_og_abid.py, make
-     generate_model_detector_responses / generate_real_detector_responses
-     take amplitude_grid/angle_grid (and real_amplitudes/real_angles) as params.
-  2. Comment out the internal generate_model_* calls inside those functions.
-  3. Run: python test_correctness.py
-"""
-
-def compare(func_name, cpu_out, gpu_out, rtol = 1e-5, atol = 1e-8):
+def compare(func_name, cpu_out, gpu_out, rtol = 1e-3, atol = 1e-5):
     gpu_on_host = cp.asnumpy(gpu_out)
     cpu = np.asarray(cpu_out)
     ok = np.allclose(cpu, gpu_on_host, rtol=rtol, atol=atol)
@@ -67,8 +56,8 @@ op_out_gw_to_ec = op.change_basis_gw_to_ec(angle_grid_gpu)
 compare("change_basis_gw_to_ec", og_out_gw_to_ec, op_out_gw_to_ec)
 
 #change_basis_detector_to_ec
-compare("change_basis_detector_to_ec", og.hanford_detector_angles, op.hanford_detector_angles)
-compare("change_basis_detector_to_ec", og.livingston_detector_angles, op.livingston_detector_angles)
+compare("change_basis_detector_to_ec", og.change_basis_detector_to_ec(og.hanford_detector_angles), op.change_basis_detector_to_ec(op.hanford_detector_angles))
+compare("change_basis_detector_to_ec",  og.change_basis_detector_to_ec(og.livingston_detector_angles), op.change_basis_detector_to_ec(op.livingston_detector_angles))
 
 #time_delay_hanford_to_livingston
 delay_cpu = np.stack([og.time_delay_hanford_to_livingston(i) for i in angle_grid_cpu])
@@ -94,8 +83,8 @@ ang_cpu = og.generate_model_angles_array(number_angular_samples)
 amp_cpu = og.generate_model_amplitudes_array(number_amplitude_combinations, gw_max_amps)
 ang_gpu = cp.asarray(ang_cpu)
 amp_gpu = cp.asarray(amp_cpu)
-m_resp_cpu, m_ang_cpu = og.generate_model_detector_responses(amp_cpu, ang_cpu, gw_frequency, gw_lifetime, detector_sampling_rate, gw_max_amps, number_amplitude_combinations, number_angular_samples)
-m_resp_gpu, m_ang_gpu = op.generate_model_detector_responses(amp_gpu, ang_gpu, gw_frequency, gw_lifetime, detector_sampling_rate, gw_max_amps, number_amplitude_combinations, number_angular_samples)
+m_resp_cpu, m_ang_cpu = og.generate_model_detector_responses(amp_cpu, ang_cpu, gw_frequency, gw_lifetime, detector_sampling_rate, number_amplitude_combinations, number_angular_samples)
+m_resp_gpu, m_ang_gpu = op.generate_model_detector_responses(amp_gpu, ang_gpu, gw_frequency, gw_lifetime, detector_sampling_rate, number_amplitude_combinations, number_angular_samples)
 compare("model response", m_resp_cpu, m_resp_gpu)
 compare("model angles", m_ang_cpu, m_ang_gpu)
 
@@ -105,8 +94,8 @@ ang_r_cpu = og.generate_model_angles_array(1)
 amp_r_cpu = og.generate_model_amplitudes_array(1, gw_max_amps)
 ang_r_gpu = cp.asarray(ang_r_cpu)
 amp_r_gpu = cp.asarray(amp_r_cpu)
-r_resp_cpu, r_ang_cpu = og.generate_real_detector_responses(gw_frequency,gw_lifetime,detector_sampling_rate,gw_max_amps,number_amplitude_combinations,number_angular_samples,max_noise_amp,amp_r_cpu[0],ang_r_cpu[0])
-r_resp_gpu, r_ang_gpu = op.generate_real_detector_responses(gw_frequency,gw_lifetime,detector_sampling_rate,gw_max_amps,number_amplitude_combinations,number_angular_samples,max_noise_amp,amp_r_gpu[0],ang_r_gpu[0])
+r_resp_cpu, r_ang_cpu = og.generate_real_detector_responses(amp_r_cpu[0],ang_r_cpu[0],gw_frequency,gw_lifetime,detector_sampling_rate,number_amplitude_combinations,number_angular_samples,max_noise_amp)
+r_resp_gpu, r_ang_gpu = op.generate_real_detector_responses(amp_r_gpu[0],ang_r_gpu[0],gw_frequency,gw_lifetime,detector_sampling_rate,number_amplitude_combinations,number_angular_samples,max_noise_amp)
 compare("real response", r_resp_cpu, r_resp_gpu)
 compare("real angles", r_ang_cpu, r_ang_gpu)
 

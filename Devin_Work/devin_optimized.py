@@ -12,7 +12,16 @@ import time
 import numpy as np
 import cupy as cp 
 from cupyx.profiler import benchmark
-
+DTYPE = cp.float32  # if needed to switch to fp64 
+abs_diff_sum = cp.ReductionKernel(      # needed in the get_best_fit_angles_deltas method to reduce the diff abs and sum into 1 operation
+    'T real, T model',   # two inputs per element
+    'T out',             # one output
+    'abs(real - model)', # what to compute per element
+    'a + b',             # how to combine them (add)
+    'out = a',           # write the final total
+    '0',                 # starting value
+    'abs_diff_sum'
+)
 # Constants (SI units unless noted otherwise)
 NUMBER_DETECTORS = 2
 NUMBER_GW_POLARIZATIONS = 2
@@ -33,13 +42,13 @@ hanford_detector_angles = cp.array([
     dms_to_rad(46, 27, 18.528),
     dms_to_rad(240, 35, 32.4343),
     cp.deg2rad(125.9994) + cp.pi / 2
-])
+], dtype=DTYPE)
 
 livingston_detector_angles = cp.array([
     dms_to_rad(30, 33, 46.4196),
     dms_to_rad(269, 13, 32.7346),
     cp.deg2rad(197.7165) + cp.pi / 2
-])
+], dtype=DTYPE)
 
 #=========================================================================
 
@@ -87,7 +96,7 @@ def source_vector_from_angles(angle_grid) :
     #[first, second, third] = angles
     all_first = angle_grid[..., 0]
     all_second = angle_grid[..., 1]
-    initial_source_vector = cp.array([cp.cos(all_first)*cp.cos(all_second), cp.cos(all_first)*cp.sin(all_second), cp.sin(all_first)]).T # .T because we need (n_ang,3) 
+    initial_source_vector = cp.array([cp.cos(all_first)*cp.cos(all_second), cp.cos(all_first)*cp.sin(all_second), cp.sin(all_first)], dtype=DTYPE).T # .T because we need (n_ang,3) 
     return initial_source_vector # returns whole angle grid converted to source vector
 
 #=========================================================================
@@ -123,7 +132,7 @@ def change_basis_gw_to_ec(angle_grid) :
             -cp.sin(all_declination) * cp.cos(all_right_ascension),
             -cp.sin(all_declination) * cp.sin(all_right_ascension),
             cp.cos(all_declination) 
-        ]).T  # .T because we need (n_ang,3)
+        ], dtype=DTYPE).T  # .T because we need (n_ang,3)
     initial_gw_x_vector_earth_centered = cp.cross(
             initial_gw_z_vector_earth_centered,
             initial_gw_y_vector_earth_centered,
@@ -145,7 +154,7 @@ def change_basis_gw_to_ec(angle_grid) :
             [cos_p, -sin_p, zeros],
             [sin_p,  cos_p, zeros],
             [zeros,  zeros,  ones]
-        ])
+        ], dtype=DTYPE)
     # to get the shape (n_ang, 3, 3) so that the matmul can be applied to the 3x3 matrix
     polarization_rotation_matrices = cp.transpose(polarization_rotation_matrices, (2,0,1))
 
@@ -185,7 +194,7 @@ def change_basis_detector_to_ec(detector_angles) :
     z_det_ec = source_vector_from_angles(detector_angles)
 
     # x̂_det is tangent eastward
-    x_det_ec = cp.array([-cp.sin(longitude), cp.cos(longitude), cp.array(0.0)]) # array because 0-d array and python float mismatch
+    x_det_ec = cp.array([-cp.sin(longitude), cp.cos(longitude), cp.array(0.0)], dtype=DTYPE) # array because 0-d array and python float mismatch
 
     # ŷ_det completes right-handed set
     y_det_ec = cp.cross(z_det_ec, x_det_ec)
@@ -199,7 +208,7 @@ def change_basis_detector_to_ec(detector_angles) :
         [cp.cos(orientation), -cp.sin(orientation),  cp.array(0.0)],
         [cp.sin(orientation),  cp.cos(orientation),  cp.array(0.0)],
         [cp.array(0.0),              cp.array(0.0),  cp.array(1.0)]
-    ])
+    ], dtype=DTYPE)
 
     T_contravariant = orientation_rotation @ det_vecs_ec
     
@@ -242,7 +251,7 @@ def beam_pattern_response_functions(detector_angles, angle_grid) :
         [0.5,  0.0, 0.0],
         [0.0, -0.5, 0.0],
         [0.0,  0.0, 0.0]
-    ])
+    ], dtype=DTYPE)
 
     # Change-of-basis: detector frame → Earth-centered
     det_to_ec_basis = change_basis_detector_to_ec(detector_angles)
@@ -334,7 +343,7 @@ def generate_network_time_array(signal_lifetime, detector_sampling_rate, maximum
     half_samples = int(cp.ceil(T_max * detector_sampling_rate))
 
     # Generate symmetric time array around zero
-    time_array = cp.arange(-half_samples, half_samples) / detector_sampling_rate
+    time_array = (cp.arange(-half_samples, half_samples) / detector_sampling_rate).astype(DTYPE)
     return time_array
 
 #=========================================================================
@@ -369,10 +378,10 @@ def generate_oscillatory_terms(signal_lifetime, signal_frequency, time_array, ti
     """
     
     # Gaussian Q-factor
-    Q = cp.sqrt(cp.log(2)) / signal_lifetime
+    Q = (cp.sqrt(cp.log(2)) / signal_lifetime).astype(DTYPE)
 
     # Time relative to arrival at this detector
-    time_delay = cp.atleast_1d(time_delay)
+    time_delay = cp.atleast_1d(time_delay).astype(DTYPE)
     dt = time_array[cp.newaxis, :] - time_delay[:, cp.newaxis] # dt = (n_ang, n_times)
     
     # Envelope and phase arrays
@@ -423,9 +432,9 @@ def generate_model_angles_array(number_angular_samples) :
     """
     
     # Declinations: uniform in [–π/2, π/2]
-    dec = (cp.random.rand(number_angular_samples) - 0.5) * cp.pi
+    dec = ((cp.random.rand(number_angular_samples) - 0.5) * cp.pi).astype(DTYPE)
     # Right ascension & polarization: uniform in [0, 2π)
-    ra_psi = cp.random.rand(number_angular_samples, 2) * 2 * cp.pi
+    ra_psi = (cp.random.rand(number_angular_samples, 2) * 2 * cp.pi).astype(DTYPE)
     # Stack into shape (N, 3)
     angle_grid = cp.column_stack((dec, ra_psi))
     return angle_grid
@@ -447,7 +456,7 @@ def generate_model_amplitudes_array(number_amplitude_combinations, gw_max_amps) 
                     where each row is a random amplitude vector [A_+, B_x, A_+, B_x],
                     with each component sampled uniformly from [0, gw_max_amps).
     """
-    return cp.random.rand(number_amplitude_combinations, NUMBER_GW_MODES) * gw_max_amps
+    return (cp.random.rand(number_amplitude_combinations, NUMBER_GW_MODES) * gw_max_amps).astype(DTYPE)
 
 
 #=========================================================================
@@ -512,7 +521,7 @@ def generate_model_detector_responses(
     angle_grid = generate_model_angles_array(n_ang)                     # shape (n_ang, 3) (100,3)
 
     # Initialize output array: detectors=2 (0=H1, 1=L1)
-    responses = cp.empty((n_ang, n_amp, n_times, 2))
+    responses = cp.empty((n_ang, n_amp, n_times, 2), dtype=DTYPE)
 
     Fp_H, Fx_H = beam_pattern_response_functions(hanford_detector_angles, angle_grid)  
     Fp_L, Fx_L = beam_pattern_response_functions(livingston_detector_angles, angle_grid)
@@ -554,7 +563,7 @@ def generate_noise_array(max_noise_amp,number_time_samples) :
                     uniformly distributed random noise values in the range [0, max_noise_amp).
     """
     
-    noise_array = cp.random.rand(number_time_samples)*max_noise_amp
+    noise_array = (cp.random.rand(number_time_samples)*max_noise_amp).astype(DTYPE)
     return noise_array
 
 #=========================================================================
@@ -578,7 +587,7 @@ def generate_real_detector_responses(
     # 1. Setup
     time_array = generate_network_time_array(signal_lifetime, detector_sampling_rate, MAX_HANFORD_LIVINGSTON_DELAY)
     number_time_samples = time_array.size
-
+    print("time_array:", time_array.dtype)
     # 2. Sample 1 true amplitude and angle
     real_amplitudes = generate_model_amplitudes_array(1, gw_max_amps)[0]
     real_angles = generate_model_angles_array(1)[0] # returns (3,)
@@ -598,13 +607,13 @@ def generate_real_detector_responses(
     # 5. Noise arrays
     noise_h = generate_noise_array(max_noise_amp, number_time_samples)
     noise_l = generate_noise_array(max_noise_amp, number_time_samples)
-
     # 6. Combine signal + noise for both detectors using broadcasting
     weights_h = cp.array([fplus_hanford[0], fcross_hanford[0], fplus_hanford[0], fcross_hanford[0]]) # (4,)
     weights_l = cp.array([fplus_livingston[0], fcross_livingston[0], fplus_livingston[0], fcross_livingston[0]]) 
 
     signal_h = cp.dot(osc_hanford * weights_h, real_amplitudes) # (n_times,)
     signal_l = cp.dot(osc_livingston * weights_l, real_amplitudes)
+    print("osc_h:", osc_hanford.dtype, "weights_h:", weights_h.dtype, "signal_h:", signal_h.dtype)
 
     # Shape: (time_samples, detectors)
     small_response = cp.stack([signal_h + noise_h, signal_l + noise_l], axis=1)
@@ -654,11 +663,16 @@ def get_best_fit_angles_deltas(real_detector_responses, real_angles_array,
     sum_real_minimum_angle_deltas = cp.sum(cp.abs(real_angles_array[0] - model_angles_array[min_angle_idx]))
     s = cp.cuda.Event(); e = cp.cuda.Event()
     s.record()
-    response_deltas = cp.abs(real_detector_responses - model_detector_responses)
-    summed_response_deltas = cp.sum(response_deltas, axis=(-1, -2))  # shape: (n_angles, n_amps)
+    # response_deltas = cp.abs(real_detector_responses - model_detector_responses)
+    # summed_response_deltas = cp.sum(response_deltas, axis=(-1, -2))  # shape: (n_angles, n_amps)
+    summed_response_deltas = abs_diff_sum(
+        real_detector_responses, 
+        model_detector_responses,
+        axis = (-1,-2) 
+    )
     e.record(); e.synchronize()
     t = cp.cuda.get_elapsed_time(s,e)/1000
-    print(t)
+    print("time taken for diff+abs+sum",t)
     # 2. Single best fit: minimum total difference in detector responses
     def single_best_fit():
         min_response_idx = cp.unravel_index(cp.argmin(summed_response_deltas), summed_response_deltas.shape)
@@ -697,6 +711,7 @@ def run_northstar_pipeline(
     number_angular_samples=500,
     number_amplitude_combinations=500
 ):
+    cp.random.seed(0)
     start = cp.cuda.Event()
     end = cp.cuda.Event()
     # calculating runtime on a perfectly warmed up GPU i.e runtime minus the context initialization cost.
@@ -731,7 +746,7 @@ def run_northstar_pipeline(
 
     # Run the angle comparison algorithms
     s.record()
-
+    print("real:", real_responses.dtype, "model:", model_responses.dtype)
     deltas, single_func, weighted_func = get_best_fit_angles_deltas(
         real_responses,
         real_angles,
