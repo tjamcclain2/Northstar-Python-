@@ -13,6 +13,15 @@ import numpy as np
 import cupy as cp 
 from cupyx.profiler import benchmark
 DTYPE = cp.float32  # if needed to switch to fp64 
+abs_diff_sum = cp.ReductionKernel(      # needed in the get_best_fit_angles_deltas method to reduce the diff abs and sum into 1 operation
+    'T real, T model',   # two inputs per element
+    'T out',             # one output
+    'abs(real - model)', # what to compute per element
+    'a + b',             # how to combine them (add)
+    'out = a',           # write the final total
+    '0',                 # starting value
+    'abs_diff_sum'
+)
 # Constants (SI units unless noted otherwise)
 NUMBER_DETECTORS = 2
 NUMBER_GW_POLARIZATIONS = 2
@@ -654,11 +663,16 @@ def get_best_fit_angles_deltas(real_detector_responses, real_angles_array,
     sum_real_minimum_angle_deltas = cp.sum(cp.abs(real_angles_array[0] - model_angles_array[min_angle_idx]))
     s = cp.cuda.Event(); e = cp.cuda.Event()
     s.record()
-    response_deltas = cp.abs(real_detector_responses - model_detector_responses)
-    summed_response_deltas = cp.sum(response_deltas, axis=(-1, -2))  # shape: (n_angles, n_amps)
+    # response_deltas = cp.abs(real_detector_responses - model_detector_responses)
+    # summed_response_deltas = cp.sum(response_deltas, axis=(-1, -2))  # shape: (n_angles, n_amps)
+    summed_response_deltas = abs_diff_sum(
+        real_detector_responses, 
+        model_detector_responses,
+        axis = (-1,-2) 
+    )
     e.record(); e.synchronize()
     t = cp.cuda.get_elapsed_time(s,e)/1000
-    print(t)
+    print("time taken for diff+abs+sum",t)
     # 2. Single best fit: minimum total difference in detector responses
     def single_best_fit():
         min_response_idx = cp.unravel_index(cp.argmin(summed_response_deltas), summed_response_deltas.shape)
