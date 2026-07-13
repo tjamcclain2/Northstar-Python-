@@ -14,9 +14,9 @@ import cupy as cp
 from cupyx.profiler import benchmark
 DTYPE = cp.float32  # if needed to switch to fp64 
 abs_diff_sum = cp.ReductionKernel(      # needed in the get_best_fit_angles_deltas method to reduce the diff abs and sum into 1 operation
-    'T real, T model',   # two inputs per element
+    'T wh0, T wh1, T wh2, T wh3, T wl0, T wl1, T wl2, T wl3, T a0, T a1, T a2, T a3, T realH, T realL',   # input params
     'T out',             # one output
-    'abs(real - model)', # what to compute per element
+    'abs(realH - (wh0*a0+wh1*a1+wh2*a2+wh3*a3)) + abs(realL - (wl0*a0+wl1*a1+wl2*a2+wl3*a3))', # what to compute per element
     'a + b',             # how to combine them (add)
     'out = a',           # write the final total
     '0',                 # starting value
@@ -521,29 +521,29 @@ def generate_model_detector_responses(
     angle_grid = generate_model_angles_array(n_ang)                     # shape (n_ang, 3) (100,3)
 
     # Initialize output array: detectors=2 (0=H1, 1=L1)
-    responses = cp.empty((n_ang, n_amp, n_times, 2), dtype=DTYPE)
+    # responses = cp.empty((n_ang, n_amp, n_times, 2), dtype=DTYPE)
 
     Fp_H, Fx_H = beam_pattern_response_functions(hanford_detector_angles, angle_grid)  
     Fp_L, Fx_L = beam_pattern_response_functions(livingston_detector_angles, angle_grid)
     pattern_H = cp.array([Fp_H, Fx_H, Fp_H, Fx_H]).T  # (n_ang, 4)
-    weighted_H = hanford_terms * pattern_H[:, cp.newaxis, :] 
+    weighted_H = hanford_terms * pattern_H[:, cp.newaxis, :] # (n_ang, n_times, 4)
     delay_L = time_delay_hanford_to_livingston(angle_grid)
     liv_terms = generate_oscillatory_terms(
             signal_lifetime, signal_frequency, time_array, delay_L
         )   
     pattern_L = cp.array([Fp_L, Fx_L, Fp_L, Fx_L]).T # (n_ang, 4)
     weighted_L = liv_terms * pattern_L[:, cp.newaxis, :]
-
     # einsum
     '''
         weighted_H.shape = (n_ang, n_times, 4)
         amplitude_grid.shape = (n_amplitudes, 4) 
         needed shape = (n_ang, n_amp, n_times)
         # computes all (weighted_H @ amps) at once instead of looping
-    '''
-    responses[:, :, :, 0] = cp.einsum('atm,pm->apt', weighted_H, amplitude_grid)
-    responses[:, :, :, 1] = cp.einsum('atm,pm->apt', weighted_L, amplitude_grid)
-    return responses, angle_grid
+    # '''
+    # responses[:, :, :, 0] = cp.einsum('atm,pm->apt', weighted_H, amplitude_grid)
+    # responses[:, :, :, 1] = cp.einsum('atm,pm->apt', weighted_L, amplitude_grid)
+    weights_and_amps = [weighted_H, weighted_L, amplitude_grid]
+    return weights_and_amps, angle_grid
 
 
 #=========================================================================
@@ -655,6 +655,24 @@ def get_best_fit_angles_deltas(real_detector_responses, real_angles_array,
             weighted_best_fit_time
         ]
     """
+    weighted_H = model_detector_responses[0]
+    weighted_L = model_detector_responses[1]
+    amplitude_grid = model_detector_responses[2]
+    a0 = amplitude_grid[:, 0][cp.newaxis, :, cp.newaxis]
+    a1 = amplitude_grid[:, 1][cp.newaxis, :, cp.newaxis]
+    a2 = amplitude_grid[:, 2][cp.newaxis, :, cp.newaxis]
+    a3 = amplitude_grid[:, 3][cp.newaxis, :, cp.newaxis]
+    wh0 = weighted_H[:, :, 0][:, cp.newaxis, :]
+    wh1 = weighted_H[:, :, 1][:, cp.newaxis, :]
+    wh2 = weighted_H[:, :, 2][:, cp.newaxis, :]
+    wh3 = weighted_H[:, :, 3][:, cp.newaxis, :]
+    wl0 = weighted_L[:, :, 0][:, cp.newaxis, :]
+    wl1 = weighted_L[:, :, 1][:, cp.newaxis, :]
+    wl2 = weighted_L[:, :, 2][:, cp.newaxis, :]
+    wl3 = weighted_L[:, :, 3][:, cp.newaxis, :]
+    realH = real_detector_responses[...,0]
+    realL = real_detector_responses[...,1]
+
     # 1. Oracle best: angle delta to closest model angle
     model_angles_array = cp.array(model_angles_array)
     angle_deltas = cp.abs(real_angles_array[0] - model_angles_array)
@@ -665,10 +683,9 @@ def get_best_fit_angles_deltas(real_detector_responses, real_angles_array,
     s.record()
     # response_deltas = cp.abs(real_detector_responses - model_detector_responses)
     # summed_response_deltas = cp.sum(response_deltas, axis=(-1, -2))  # shape: (n_angles, n_amps)
-    summed_response_deltas = abs_diff_sum(
-        real_detector_responses, 
-        model_detector_responses,
-        axis = (-1,-2) 
+    summed_response_deltas = abs_diff_sum( 
+        wh0, wh1, wh2,   wh3,   wl0,   wl1,   wl2,   wl3,   a0,   a1,   a2,   a3,   realH,   realL,
+        axis = -1
     )
     e.record(); e.synchronize()
     t = cp.cuda.get_elapsed_time(s,e)/1000
@@ -711,7 +728,7 @@ def run_northstar_pipeline(
     number_angular_samples=500,
     number_amplitude_combinations=500
 ):
-    cp.random.seed(0)
+    # cp.random.seed(0)
     start = cp.cuda.Event()
     end = cp.cuda.Event()
     # calculating runtime on a perfectly warmed up GPU i.e runtime minus the context initialization cost.
@@ -746,7 +763,7 @@ def run_northstar_pipeline(
 
     # Run the angle comparison algorithms
     s.record()
-    print("real:", real_responses.dtype, "model:", model_responses.dtype)
+    # print("real:", real_responses.dtype, "model:", model_responses.dtype)
     deltas, single_func, weighted_func = get_best_fit_angles_deltas(
         real_responses,
         real_angles,
@@ -800,8 +817,11 @@ def run_northstar_pipeline(
     #     for line in results:
     #         f.write(line + "\n")
 
-    print(f"\n[OK] Output also written to: {filename}")
+    # print(f"\n[OK] Output also written to: {filename}")
+    print(f"ang x amp: {number_angular_samples} x {number_amplitude_combinations}")
+
 if __name__=="__main__":
+    run_northstar_pipeline()
     run_northstar_pipeline()
 
 #LATEST

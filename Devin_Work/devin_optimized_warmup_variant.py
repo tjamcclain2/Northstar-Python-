@@ -13,7 +13,9 @@ array shapes/dtypes) before starting the clock. That forces cuSOLVER's
 handle creation (first cp.linalg.inv), cuRAND's generator creation (first
 cp.random call), and NVRTC's kernel JIT-compilation (first einsum/elementwise
 call at each shape+dtype) to happen during the discarded pass instead of the
-measured one. The reported runtime is what a call to this pipeline would
+measured one. 
+
+The reported runtime is what a call to this pipeline would
 cost after the first one, i.e. steady-state cost within a long-lived
 process -- NOT the cost of a single fresh `python this_file.py` invocation
 (that cost is still paid, just before the timer starts).
@@ -855,8 +857,7 @@ def run_northstar_pipeline(
     # with open(filename, "w") as f:
     #     for line in results:
     #         f.write(line + "\n")
-
-    print(f"\n[OK] Output also written to: {filename}")
+    print(f"ang x amp: {number_angular_samples} x {number_amplitude_combinations}")
 if __name__=="__main__":
     run_northstar_pipeline()
     # Pass warmup=False to see the honest cold-start number instead, e.g.:

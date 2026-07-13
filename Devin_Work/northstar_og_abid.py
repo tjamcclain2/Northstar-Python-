@@ -665,8 +665,8 @@ def generate_real_detector_responses(signal_frequency, signal_lifetime, detector
     noise_l = generate_noise_array(max_noise_amp, number_time_samples)
 
     # 6. Combine signal + noise for both detectors using broadcasting
-    weights_h = np.array([fplus_hanford, fcross_hanford, fplus_hanford, fcross_hanford])
-    weights_l = np.array([fplus_livingston, fcross_livingston, fplus_livingston, fcross_livingston])
+    weights_h = np.array([fplus_hanford, fplus_hanford, fcross_hanford, fcross_hanford])
+    weights_l = np.array([fplus_livingston, fplus_livingston, fcross_livingston, fcross_livingston])
 
     signal_h = np.dot(osc_hanford * weights_h, real_amplitudes)
     signal_l = np.dot(osc_livingston * weights_l, real_amplitudes)
@@ -685,7 +685,7 @@ def generate_real_detector_responses(signal_frequency, signal_lifetime, detector
         (number_angular_samples, NUMBER_SOURCE_ANGLES)
     ).copy()
 
-    return real_detector_response_array, real_angles_array 
+    return real_detector_response_array, real_angles_array
 
 
 #=========================================================================
@@ -759,7 +759,7 @@ def run_northstar_pipeline(
     number_amplitude_combinations=500
 ):
     start_time = time.process_time()
-    np.random.seed(0)
+
     # Generate synthetic model and noisy real detector responses
     model_responses, model_angles = generate_model_detector_responses(
         gw_frequency,
@@ -810,11 +810,12 @@ def run_northstar_pipeline(
     for line in results:
         print(line)
 
-    # Write to file
-    with open(filename, "w") as f:
-        for line in results:
-            f.write(line + "\n")
+    # # Write to file
+    # with open(filename, "w") as f:
+    #     for line in results:
+    #         f.write(line + "\n")
 
-    print(f"\n[✔] Output also written to: {filename}")
+    # print(f"\n[✔] Output also written to: {filename}")
 if __name__ == "__main__":
     run_northstar_pipeline()
+

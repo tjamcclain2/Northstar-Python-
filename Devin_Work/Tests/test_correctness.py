@@ -3,7 +3,7 @@ import cupy as cp
 import devin_optimized_testing as op
 import abid_testing as og
 
-def compare(func_name, cpu_out, gpu_out, rtol = 1e-3, atol = 1e-5):
+def compare(func_name, cpu_out, gpu_out, rtol = 1e-4, atol = 1e-5):
     gpu_on_host = cp.asnumpy(gpu_out)
     cpu = np.asarray(cpu_out)
     ok = np.allclose(cpu, gpu_on_host, rtol=rtol, atol=atol)
@@ -85,7 +85,14 @@ amp_gpu = cp.asarray(amp_cpu, dtype=cp.float32)
 ang_gpu = cp.asarray(ang_cpu, dtype=cp.float32)
 m_resp_cpu, m_ang_cpu = og.generate_model_detector_responses(amp_cpu, ang_cpu, gw_frequency, gw_lifetime, detector_sampling_rate, number_amplitude_combinations, number_angular_samples)
 m_resp_gpu, m_ang_gpu = op.generate_model_detector_responses(amp_gpu, ang_gpu, gw_frequency, gw_lifetime, detector_sampling_rate, number_amplitude_combinations, number_angular_samples)
-compare("model response", m_resp_cpu, m_resp_gpu)
+# m_resp_gpu is now [weighted_H, weighted_L, amplitude_grid] (fused-kernel ingredients),
+# not a materialized (n_ang, n_amp, n_times, 2) array like m_resp_cpu -- reconstruct the
+# equivalent full array on the GPU side to check the ingredients themselves are correct.
+weighted_H_gpu, weighted_L_gpu, amp_grid_gpu = m_resp_gpu
+reconstructed_gpu = cp.empty((number_angular_samples, number_amplitude_combinations, weighted_H_gpu.shape[1], 2), dtype=cp.float32)
+reconstructed_gpu[:, :, :, 0] = cp.einsum('atm,pm->apt', weighted_H_gpu, amp_grid_gpu)
+reconstructed_gpu[:, :, :, 1] = cp.einsum('atm,pm->apt', weighted_L_gpu, amp_grid_gpu)
+compare("model response (reconstructed)", m_resp_cpu, reconstructed_gpu)
 compare("model angles", m_ang_cpu, m_ang_gpu)
 
 #generate_real_detector_responses
