@@ -2,7 +2,7 @@ import numpy as np
 import cupy as cp
 import devin_optimized_testing as op
 import abid_testing as og
-
+# Latest
 def compare(func_name, cpu_out, gpu_out, rtol = 1e-4, atol = 1e-5):
     gpu_on_host = cp.asnumpy(gpu_out)
     cpu = np.asarray(cpu_out)
