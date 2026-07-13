@@ -1,7 +1,7 @@
 import numpy as np
 import cupy as cp
-import Devin_Work.Tests.devin_optimized_testing as op
-import Devin_Work.Tests.abid_testing as og
+import devin_optimized_testing as op
+import abid_testing as og
 
 def compare(func_name, cpu_out, gpu_out, rtol = 1e-3, atol = 1e-5):
     gpu_on_host = cp.asnumpy(gpu_out)
@@ -81,8 +81,8 @@ number_angular_samples=100
 number_amplitude_combinations=100
 ang_cpu = og.generate_model_angles_array(number_angular_samples)
 amp_cpu = og.generate_model_amplitudes_array(number_amplitude_combinations, gw_max_amps)
-ang_gpu = cp.asarray(ang_cpu)
-amp_gpu = cp.asarray(amp_cpu)
+amp_gpu = cp.asarray(amp_cpu, dtype=cp.float32)
+ang_gpu = cp.asarray(ang_cpu, dtype=cp.float32)
 m_resp_cpu, m_ang_cpu = og.generate_model_detector_responses(amp_cpu, ang_cpu, gw_frequency, gw_lifetime, detector_sampling_rate, number_amplitude_combinations, number_angular_samples)
 m_resp_gpu, m_ang_gpu = op.generate_model_detector_responses(amp_gpu, ang_gpu, gw_frequency, gw_lifetime, detector_sampling_rate, number_amplitude_combinations, number_angular_samples)
 compare("model response", m_resp_cpu, m_resp_gpu)
@@ -92,8 +92,8 @@ compare("model angles", m_ang_cpu, m_ang_gpu)
 max_noise_amp=0
 ang_r_cpu = og.generate_model_angles_array(1)
 amp_r_cpu = og.generate_model_amplitudes_array(1, gw_max_amps)
-ang_r_gpu = cp.asarray(ang_r_cpu)
-amp_r_gpu = cp.asarray(amp_r_cpu)
+ang_r_gpu = cp.asarray(ang_r_cpu, dtype=cp.float32)
+amp_r_gpu = cp.asarray(amp_r_cpu, dtype=cp.float32)
 r_resp_cpu, r_ang_cpu = og.generate_real_detector_responses(amp_r_cpu[0],ang_r_cpu[0],gw_frequency,gw_lifetime,detector_sampling_rate,number_amplitude_combinations,number_angular_samples,max_noise_amp)
 r_resp_gpu, r_ang_gpu = op.generate_real_detector_responses(amp_r_gpu[0],ang_r_gpu[0],gw_frequency,gw_lifetime,detector_sampling_rate,number_amplitude_combinations,number_angular_samples,max_noise_amp)
 compare("real response", r_resp_cpu, r_resp_gpu)
