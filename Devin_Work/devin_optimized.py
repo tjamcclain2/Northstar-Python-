@@ -4,7 +4,7 @@
 Northstar Algorithm — Original Implementation and Optimization. This is the most readable version of the code, with all the optimizations applied as of July 14, 2025.
 
 Author: Dr. Tom McClain  
-Optimized by: Abid Jeem
+Optimized by: Devin Upadhyay
 Date: 2025-07-14
 """
 
@@ -13,7 +13,7 @@ import numpy as np
 import cupy as cp 
 from cupyx.profiler import benchmark
 DTYPE = cp.float32  # if needed to switch to fp64 
-abs_diff_sum = cp.ReductionKernel(      # needed in the get_best_fit_angles_deltas method to reduce the diff abs and sum into 1 operation
+abs_diff_sum = cp.ReductionKernel( # needed in the get_best_fit_angles_deltas method to reduce the diff abs and sum into 1 operation
     'T wh0, T wh1, T wh2, T wh3, T wl0, T wl1, T wl2, T wl3, T a0, T a1, T a2, T a3, T realH, T realL',   # input params
     'T out',             # one output
     'abs(realH - (wh0*a0+wh1*a1+wh2*a2+wh3*a3)) + abs(realL - (wl0*a0+wl1*a1+wl2*a2+wl3*a3))', # what to compute per element
@@ -821,6 +821,8 @@ def run_northstar_pipeline(
     print(f"ang x amp: {number_angular_samples} x {number_amplitude_combinations}")
 
 if __name__=="__main__":
+    run_northstar_pipeline()
+    run_northstar_pipeline()
     run_northstar_pipeline()
     run_northstar_pipeline()
 

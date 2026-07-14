@@ -4,7 +4,7 @@
 Northstar Algorithm — Original Implementation and Optimization. This is the most readable version of the code, with all the optimizations applied as of July 14, 2025.
 
 Author: Dr. Tom McClain  
-Optimized by: Abid Jeem
+Optimized by: Devin Upadhyay
 Date: 2025-07-14
 """
 
