@@ -1,0 +1,406 @@
+"""
+Created on Wed Jun  24 18:16:01 2026
+
+@author: Drake Perrin
+"""
+
+"""
+Northstar Sky Map — from real run_northstar_pipeline() CSV output
+
+Usage (Spyder)
+--------------
+  Step 1: Run run_northstar_pipeline() to produce a mapping_data_*.txt file
+  Step 2: Set CSV_PATH below to that file's path
+  Step 3: Press F5 or Run File
+
+  Or call directly from the Spyder console after F5:
+      generate_skymaps_from_northstar_csv("mapping_data_14_Jul_2025_12-00-00.txt")
+
+"""
+
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.cm as cm
+import matplotlib.colors as mcolors
+from mpl_toolkits.mplot3d import Axes3D          
+
+
+# USER SETTINGS  <- only section I need to edit
+
+
+# Set to None to run the built-in synthetic demo instead.
+CSV_PATH = "C:/Users/Owner/.spyder-py3/mapping_data_13_Jul_2026_11-51-41.txt"
+
+# Grid resolution — how many cells to bin samples into.
+# N_DEC * N_RA should be less than number_angular_samples 
+# in Northstar run, otherwise many cells will be empty.
+#   for 100  Northstar samples -> try N_DEC=8,  N_RA=16
+#   for 1000 Northstar samples -> try N_DEC=20, N_RA=40
+N_DEC = 15
+N_RA  = 30   
+
+
+DETECTOR_SITES = [ 
+    (46.455, 240.592, "H1"),   
+    (30.563, 269.226, "L1"), ]
+
+
+
+# 1. LOAD  —  reads the 4-column Northstar mapping_data file
+
+
+def load_northstar_csv(path):
+    
+    arr = np.loadtxt(path, delimiter=',', comments='#')
+
+    # Validate shape
+    if arr.ndim == 1:
+        arr = arr.reshape(1, -1)
+    if arr.shape[1] != 4:
+        raise ValueError(
+            f"Expected 4 columns (dec, ra, pol, weighted_sum) but got "
+            f"{arr.shape[1]}. Check the file: {path}" )
+    if not np.all(np.isfinite(arr)):
+        raise ValueError(
+            f"File contains NaN or Inf values. Check: {path}" )
+
+    dec, ra, pol, wsum = arr[:, 0], arr[:, 1], arr[:, 2], arr[:, 3]
+
+    # Make valid angular ranges (prevents floating-point edge cases)
+    dec  = np.clip(dec,  -np.pi/2, np.pi/2)
+    ra   = ra % (2 * np.pi)
+
+    print(f"\n  Loaded {len(dec):,} sky samples")
+    print(f"  Dec  range : [{np.degrees(dec.min()):+.1f}°, "
+          f"{np.degrees(dec.max()):+.1f}°]")
+    print(f"  RA   range : [{np.degrees(ra.min()):.1f}°, "
+          f"{np.degrees(ra.max()):.1f}°]")
+    print(f"  Weight range: [{wsum.min():.4f}, {wsum.max():.4f}]")
+
+    return dec, ra, pol, wsum
+
+
+
+# 2. BIN  —  scatter (dec, ra, weight) -> regular 2-D probability grid
+
+
+def bin_to_grid(dec_rad, ra_rad, weights, n_dec, n_ra):
+   
+    dec_bins = np.linspace(-np.pi/2, np.pi/2, n_dec + 1)
+    ra_bins  = np.linspace(0, 2*np.pi, n_ra  + 1)
+
+    # 0-based cell indices for each sample
+    dec_idx = np.clip(np.digitize(dec_rad, dec_bins) - 1, 0, n_dec - 1)
+    ra_idx  = np.clip(np.digitize(ra_rad,  ra_bins)  - 1, 0, n_ra  - 1)
+
+    # Accumulate weights into grid
+    grid = np.zeros((n_dec, n_ra), dtype=float)
+    np.add.at(grid, (dec_idx, ra_idx), weights)
+
+    # Convert to degrees for plotting
+    ra_edges    = np.degrees(ra_bins)
+    dec_edges   = np.degrees(dec_bins)
+    ra_centers  = 0.5 * (ra_edges[:-1]  + ra_edges[1:])
+    dec_centers = 0.5 * (dec_edges[:-1] + dec_edges[1:])
+
+    n_empty = int((grid == 0).sum())
+    n_total = n_dec * n_ra
+    if n_empty > n_total // 2:
+        print(f"\n  Warning: {n_empty}/{n_total} grid cells are empty.")
+        print(f"  Consider reducing N_DEC/N_RA or increasing "
+              f"number_angular_samples in Northstar.")
+
+    return grid, ra_edges, dec_edges, ra_centers, dec_centers
+
+
+
+# 3. NORMALISE  —  divide every cell by the total of all cells
+
+
+def normalise_grid(grid):
+    
+    total = grid.sum()
+    if total == 0:
+        raise ValueError(
+            "All grid cells are zero — the CSV may be empty or weights "
+            "are all zero." )
+    return grid / total, total
+
+
+
+# 4. PLOT A  —  2-D heat map
+
+
+def plot_2d_heatmap(norm_grid, ra_edges, dec_edges, ra_centers, dec_centers,
+                    title_suffix=""):
+    n_dec, n_ra = norm_grid.shape
+    ann_fs = max(4, int(55 / max(n_ra, n_dec)))
+
+    fig, ax = plt.subplots(figsize=(12, 5))
+    fig.suptitle(
+        f"Northstar — GW source probability sky map (2-D){title_suffix}",
+        fontsize=13, fontweight="bold" )
+
+    im = ax.pcolormesh(ra_edges, dec_edges, norm_grid,
+                       cmap="plasma", shading="flat",
+                       vmin=0, vmax=norm_grid.max())
+
+    if n_dec <= 20 and n_ra <= 40:
+        for i in range(n_dec):
+            for j in range(n_ra):
+                ax.text(ra_centers[j], dec_centers[i],
+                        f"{norm_grid[i, j]:.4f}",
+                        ha="center", va="center",
+                        fontsize=ann_fs, color="white", fontweight="bold")
+
+    cb = fig.colorbar(im, ax=ax, pad=0.02)
+    cb.set_label("GW source probability (fraction of total)", fontsize=10)
+    ax.set_xlabel("Right ascension (°)", fontsize=10)
+    ax.set_ylabel("Declination (°)", fontsize=10)
+
+    # Mark detector sites
+    for (lat_d, lon_d, label) in DETECTOR_SITES:
+        ax.plot(lon_d % 360, lat_d, 'w^', markersize=9, zorder=5)
+        ax.text(lon_d % 360 + 3, lat_d + 2, label,
+                color="white", fontsize=9, fontweight="bold")
+
+    ax.set_xticks(ra_edges[:: max(1, n_ra  // 8)])
+    ax.set_yticks(dec_edges[:: max(1, n_dec // 6)])
+    plt.tight_layout()
+    plt.show()
+
+
+
+# 5. PLOT B  —  3-D flat surface
+
+
+def plot_3d_surface(norm_grid, ra_centers, dec_centers, title_suffix=""):
+    RA_f, DEC_f = np.meshgrid(ra_centers, dec_centers)
+
+    fig = plt.figure(figsize=(10, 7))
+    fig.suptitle(
+        f"Northstar — GW source probability sky map (3-D surface){title_suffix}",
+        fontsize=13, fontweight="bold" )
+    ax = fig.add_subplot(111, projection="3d")
+    surf = ax.plot_surface(RA_f, DEC_f, norm_grid,
+                           cmap="plasma",
+                           vmin=0, vmax=norm_grid.max(),
+                           edgecolor="none", alpha=0.95)
+
+    cb = fig.colorbar(surf, ax=ax, pad=0.1, shrink=0.55)
+    cb.set_label("GW source probability", fontsize=9)
+    ax.set_xlabel("RA (°)",      fontsize=9, labelpad=6)
+    ax.set_ylabel("Dec (°)",     fontsize=9, labelpad=6)
+    ax.set_zlabel("Probability", fontsize=9, labelpad=6)
+    ax.view_init(elev=30, azim=-60)
+    plt.tight_layout()
+    plt.show()
+
+
+
+# 6. PLOT C  —  3-D globe with probability draped over Earth
+
+
+def plot_3d_globe(norm_grid, n_sphere=150, elev=25, azim=-60,
+                  cmap="plasma", alpha_globe=0.15, alpha_prob=0.90,
+                  title_suffix=""):
+    
+    n_dec_p, n_ra_p = norm_grid.shape
+
+    # Spherical coords for the probability shell (sits at radius 1.015)
+    ra_c  = np.linspace(0, 2*np.pi, n_ra_p, endpoint=False) + np.pi/n_ra_p
+    dec_c = np.linspace(-np.pi/2, np.pi/2, n_dec_p, endpoint=False) \
+            + np.pi/(2*n_dec_p)
+    RA_g, DEC_g = np.meshgrid(ra_c, dec_c)
+    R = 1.015
+    Xp = R * np.cos(DEC_g) * np.cos(RA_g)
+    Yp = R * np.cos(DEC_g) * np.sin(RA_g)
+    Zp = R * np.sin(DEC_g)
+
+    # Background Earth sphere
+    u  = np.linspace(0, 2*np.pi, n_sphere)
+    v  = np.linspace(-np.pi/2, np.pi/2, n_sphere)
+    Xe = np.outer(np.cos(v), np.cos(u))
+    Ye = np.outer(np.cos(v), np.sin(u))
+    Ze = np.outer(np.sin(v), np.ones(n_sphere))
+
+    # Grid line angle arrays
+    theta = np.linspace(0, 2*np.pi, 300)
+    phi   = np.linspace(-np.pi/2, np.pi/2, 150)
+
+    # Map probability values to colours
+    norm_obj  = mcolors.Normalize(vmin=0, vmax=norm_grid.max())
+    cmap_obj  = cm.get_cmap(cmap)
+    face_cols = cmap_obj(norm_obj(norm_grid))
+
+    fig = plt.figure(figsize=(11, 9))
+    fig.suptitle(
+        f"Northstar — GW source probability on the celestial sphere{title_suffix}",
+        fontsize=12, fontweight="bold" )
+    ax = fig.add_subplot(111, projection="3d")
+
+    # Earth sphere (blue and semi-transparent)
+    ax.plot_surface(Xe, Ye, Ze,
+                    color="steelblue", alpha=alpha_globe,
+                    linewidth=0, antialiased=True)
+
+    # Probability shell
+    ax.plot_surface(Xp, Yp, Zp,
+                    facecolors=face_cols,
+                    alpha=alpha_prob,
+                    linewidth=0, antialiased=True,
+                    shade=False)
+
+    # Latitude grid lines every 30°
+    for lat_d in range(-60, 90, 30):
+        lat = np.deg2rad(lat_d)
+        ax.plot(np.cos(lat)*np.cos(theta),
+                np.cos(lat)*np.sin(theta),
+                np.sin(lat)*np.ones_like(theta),
+                color="white", lw=0.4, alpha=0.45)
+
+    # Longitude grid lines every 45°
+    for lon_d in range(0, 360, 45):
+        lon = np.deg2rad(lon_d)
+        ax.plot(np.cos(phi)*np.cos(lon),
+                np.cos(phi)*np.sin(lon),
+                np.sin(phi),
+                color="white", lw=0.4, alpha=0.45)
+
+    # Detector markers
+    for (lat_d, lon_d, label) in DETECTOR_SITES:
+        lr  = np.deg2rad(lat_d)
+        lor = np.deg2rad(lon_d)
+        xs  = 1.06 * np.cos(lr) * np.cos(lor)
+        ys  = 1.06 * np.cos(lr) * np.sin(lor)
+        zs  = 1.06 * np.sin(lr)
+        ax.scatter(xs, ys, zs, color="white", s=60, zorder=6, marker='^')
+        ax.text(xs*1.09, ys*1.09, zs*1.09, label,
+                color="white", fontsize=9, fontweight="bold")
+
+    # Color bar
+    sm = cm.ScalarMappable(cmap=cmap_obj, norm=norm_obj)
+    sm.set_array([])
+    cb = fig.colorbar(sm, ax=ax, pad=0.05, shrink=0.5, aspect=18)
+    cb.set_label("GW source probability", fontsize=9)
+
+    ax.set_box_aspect([1, 1, 1])
+    ax.set_axis_off()
+    ax.view_init(elev=elev, azim=azim)
+    plt.tight_layout()
+    plt.show()
+    return fig, ax
+
+
+
+# 7. ONE-CALL DRIVER  —  point this at any Northstar mapping_data file
+
+
+def generate_skymaps_from_northstar_csv(csv_path,
+                                         n_dec=N_DEC, n_ra=N_RA,
+                                         make_2d=True,
+                                         make_3d_surface=True,
+                                         make_3d_globe=True):
+    
+    # Full pipeline: load -> bin -> normalise -> plot.
+
+    # Parameters 
+    # ----------
+    # csv_path : str - Path to the mapping_data_*.txt produced by run_northstar_pipeline().
+    # n_dec : int - Number of declination grid bins (default from N_DEC setting above).
+    # n_ra : int - Number of right-ascension grid bins (default from N_RA setting above).
+    #make_2d, make_3d_surface, make_3d_globe : bool - Toggle which plots to generate.
+
+    # Returns
+    # -------
+    # norm_grid : ndarray (n_dec, n_ra)
+    # The sum-normalised probability grid — available in Spyder's
+    # variable explorer after calling this function.
+
+    # Examples
+    # --------
+    # Basic use — set CSV_PATH at the top of this file and press F5, or:
+    # generate_skymaps_from_northstar_csv("mapping_data_14_Jul_2025_12-00-00.txt")
+
+    # Finer grid for a large Northstar run (say 1000 angular samples):
+    # generate_skymaps_from_northstar_csv("big_run.txt", n_dec=25, n_ra=50)
+
+    # Only the globe:
+    # generate_skymaps_from_northstar_csv("run.txt", make_2d=False, make_3d_surface=False)
+    
+    print(f"\n{'='*60}")
+    print(f"  Northstar Sky Map Pipeline")
+    print(f"{'='*60}")
+
+    # 1. Load the 4-column CSV
+    dec, ra, pol, wsum = load_northstar_csv(csv_path)
+
+    # 2. Bin scattered points onto a regular sky grid
+    print(f"\n  Binning {len(dec):,} samples onto "
+          f"{n_dec} × {n_ra} grid ...")
+    grid, ra_e, dec_e, ra_c, dec_c = bin_to_grid(dec, ra, wsum, n_dec, n_ra)
+
+    # 3. Sum-normalise into a probability distribution
+    norm_grid, total = normalise_grid(grid)
+
+    # Report peak location
+    pk = np.unravel_index(norm_grid.argmax(), norm_grid.shape)
+    print(f"\n  Total weight accumulated : {total:.4f}")
+    print(f"  Sum of normalised grid   : {norm_grid.sum():.8f}  (should be 1.0)")
+    print(f"  Peak probability cell    : {norm_grid.max():.6f}")
+    print(f"  Peak location            : "
+          f"RA = {ra_c[pk[1]]:.1f}°,  Dec = {dec_c[pk[0]]:.1f}°")
+
+    suffix = f"\n({csv_path})"
+
+    # 4. Generate plots
+    if make_2d:
+        plot_2d_heatmap(norm_grid, ra_e, dec_e, ra_c, dec_c, suffix)
+    if make_3d_surface:
+        plot_3d_surface(norm_grid, ra_c, dec_c, suffix)
+    if make_3d_globe:
+        plot_3d_globe(norm_grid, title_suffix=suffix)
+
+    return norm_grid
+
+
+
+# 8. SYNTHETIC DEMO  —  runs when CSV_PATH is None
+
+
+def _run_synthetic_demo():
+    
+    # Generates fake Northstar-format scatter data with a concentrated source
+    # near RA=150°, Dec=20°, then runs the full pipeline so you can verify
+    # the plots before using real data.
+    
+    print("\n[No CSV_PATH set — running synthetic demo]")
+    print("[Set CSV_PATH at the top of this file to use real Northstar output]")
+
+    rng = np.random.default_rng(42)
+    n   = 500
+    dec_true, ra_true = np.deg2rad(20), np.deg2rad(150)
+    dec  = np.clip(rng.normal(dec_true, 0.3, n), -np.pi/2, np.pi/2)
+    ra   = rng.normal(ra_true, 0.4, n) % (2*np.pi)
+    pol  = rng.uniform(0, 2*np.pi, n)
+    dist = np.sqrt((dec - dec_true)**2 + (ra - ra_true)**2)
+    wsum = np.exp(-dist**2 / 0.1) + rng.uniform(0, 0.05, n)
+
+    grid, ra_e, dec_e, ra_c, dec_c = bin_to_grid(dec, ra, wsum, N_DEC, N_RA)
+    norm_grid, _ = normalise_grid(grid)
+
+    suffix = "\n(synthetic demo — set CSV_PATH to use real Northstar output)"
+    plot_2d_heatmap(norm_grid, ra_e, dec_e, ra_c, dec_c, suffix)
+    plot_3d_surface(norm_grid, ra_c, dec_c, suffix)
+    plot_3d_globe(norm_grid, title_suffix=suffix)
+    return norm_grid
+
+
+
+# 9. ENTRY POINT
+
+
+if CSV_PATH is not None:
+    generate_skymaps_from_northstar_csv(CSV_PATH)
+else:
+    _run_synthetic_demo()
