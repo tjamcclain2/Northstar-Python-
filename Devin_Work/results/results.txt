@@ -1,0 +1,28 @@
+Optimized Northstar Run Summary
+------------------------------------------------------------------------
+GPU: NVIDIA GeForce RTX 4070
+500 angles x 500 amplitude combination
+------------------------------------------------------------------------
+The best possible fit angle delta (in radians) was: 0.759783
+The single best fit algorithm angle delta (in radians) was: 3.808950
+The weighted best fit algorithm angle delta (in radians) was: 5.071582
+------------------------------------------------------------------------
+The single best fit algorithm run time (in seconds) was: 0.000289
+The weighted best fit algorithm run time (in seconds) was: 0.000196
+The full process run time (in seconds) was: 0.020468
+
+
+Optimized Northstar Run Summary
+------------------------------------------------------------------------
+GPU: NVIDIA GeForce RTX 4070
+500 angles x 500 amplitude combination
+------------------------------------------------------------------------
+The best possible fit angle delta (in radians) was: 0.296151
+The single best fit algorithm angle delta (in radians) was: 9.853441
+The weighted best fit algorithm angle delta (in radians) was: 6.417248
+------------------------------------------------------------------------
+The single best fit algorithm run time (in seconds) was: 0.000278
+The weighted best fit algorithm run time (in seconds) was: 0.000185
+The full process run time (in seconds) was: 0.020592
+
+
