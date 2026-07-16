@@ -4,6 +4,13 @@ fourier_pipeline.py
 Simulate a two-detector (Hanford + Livingston) gravitational-wave observation and
 process it with a wavelet Qp-transform to locate the merger in time-frequency.
 
+The Qp transform used in this pipeline is a chirping-wavelet transform that is more sensitive to the
+inspiral phase of a binary merger than the standard Q-transform. It is based on the work of
+Virtuoso & Milotti, "Chirplet-based analysis of gravitational-wave signals",
+https://arxiv.org/pdf/2404.18781, which I reccomend reading for a deeper understanding of the Qp transform 
+and its advantages over the standard Q-transform. I do not completely recreate the Qp transform here,
+but I do implement the core equations and use it to extract the merger time from a simulated signal. 
+
 Pipeline stages (in execution order below):
     1. Draw random source parameters (masses, inclination, phase) in NRSur7dq4's range.
     2. Draw a random sky location where BOTH detectors respond well.
