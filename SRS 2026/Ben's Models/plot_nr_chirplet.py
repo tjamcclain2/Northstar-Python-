@@ -1,4 +1,7 @@
 """
+NOTE: This is an older version of my chirplet modeling and has fewer comments and generally
+worse design compared to chirplet_pipeline.py. I reccomend starting there.
+
 conda activate gw-ligo
 python src/plot_nr_chirplet.py
 
