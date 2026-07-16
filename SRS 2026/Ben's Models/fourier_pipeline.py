@@ -4,6 +4,13 @@ fourier_pipeline.py
 Simulate a two-detector (Hanford + Livingston) gravitational-wave observation and
 process it with a wavelet Qp-transform to locate the merger in time-frequency.
 
+The Qp transform used in this pipeline is a chirping-wavelet transform that is more sensitive to the
+inspiral phase of a binary merger than the standard Q-transform. It is based on the work of
+Virtuoso & Milotti, "Chirplet-based analysis of gravitational-wave signals",
+https://arxiv.org/pdf/2404.18781, which I reccomend reading for a deeper understanding of the Qp transform 
+and its advantages over the standard Q-transform. I do not completely recreate the Qp transform here,
+but I do implement the core equations and use it to extract the merger time from a simulated signal. 
+
 Pipeline stages (in execution order below):
     1. Draw random source parameters (masses, inclination, phase) in NRSur7dq4's range.
     2. Draw a random sky location where BOTH detectors respond well.
@@ -27,6 +34,7 @@ from pycbc.psd import aLIGOZeroDetHighPower
 from pycbc.noise import noise_from_psd
 from pycbc.filter import sigma, highpass, lowpass
 from pycbc.types import FrequencySeries
+from pycbc.types import TimeSeries
 
 
 # ============================================================
@@ -162,30 +170,37 @@ def energy_density(tf, freqs, thr=THRESHOLD, noise_cols=200):
     return float(density), float(tf_norm.max()), int(mask.sum())
 
 
-def merger_time_from_energy(times, freqs, tf, thr=THRESHOLD, noise_cols=200):
-    """Merger time = energy-weighted centroid (in time) of the thresholded map.
-
-    Energy is summed over frequency at each time; the loudest region is the merger.
+def merger_time_from_energy(times, freqs, tf, thr=THRESHOLD, noise_cols=200,
+                            window_s=0.03):
+    """Merger time = time of the energy PEAK of the thresholded Qp map. Threshold
+    at E_thr (chi^2 noise), then use the energy peak as the signal locator. We take 
+    the energy-weighted centroid in a +/- window_s window around that peak, so the
+    long inspiral cannot bias the estimate and sub-bin precision is retained.
+    Uses energy, so ringdown high-frequency content does not pull
+    the estimate late. Returns (t_merger, t_sigma, power_t).
     """
     noise_level = np.median(tf[:, :noise_cols])
-    tf_norm = tf * (2.0 / noise_level)                    # mean-2 normalization
+    tf_norm = tf * (2.0 / noise_level)                 # chi^2 mean-2 normalization
 
-    tf_thr = np.where(tf_norm > thr, tf_norm, 0.0)
-    power_t = tf_thr.sum(axis=0)
+    tf_thr = np.where(tf_norm > thr, tf_norm, 0.0)     # paper's E_thr thresholding
+    power_t = tf_thr.sum(axis=0)                        # surviving energy vs time
     if power_t.sum() == 0:
         raise ValueError("no tiles above threshold; lower THRESHOLD or check the map")
 
-    # localize to the MERGER: peak of the energy curve, then centroid within a window
-    peak_idx = int(np.argmax(power_t))                 # loudest time bin = merger neighborhood
+    # locate the energy peak (the paper's signal descriptor), then centroid nearby
+    peak_idx = int(np.argmax(power_t))
     dt = times[1] - times[0]
-    half = int(round(0.03 / dt))                       # +/- 30 ms window around the peak
+    half = int(round(window_s / dt))
     lo, hi = max(0, peak_idx - half), min(power_t.size, peak_idx + half + 1)
 
     w = power_t[lo:hi]
     tw = times[lo:hi]
-    t_merger = np.sum(tw * w) / np.sum(w)              # centroid within the window
+    t_merger = np.sum(tw * w) / np.sum(w)               # energy-weighted peak time
+    # spread of the energy in the window, and the error on the MEAN (sqrt of eff. N)
     t_spread = np.sqrt(np.sum(w * (tw - t_merger) ** 2) / np.sum(w))
-    return t_merger, t_spread, power_t
+    n_eff = np.sum(w) ** 2 / np.sum(w ** 2)             # effective number of bins
+    t_sigma = t_spread / np.sqrt(n_eff)                 # rough statistical error on the centroid
+    return t_merger, t_sigma, power_t
 
 
 def center_on_peak(times, tf):
@@ -197,7 +212,7 @@ def center_on_peak(times, tf):
 # 1-2. DRAW SOURCE AND SKY PARAMETERS
 # ============================================================
 
-# --- Source: total mass and mass ratio inside NRSur7dq4's valid region ---
+# --- Source: random total mass and mass ratio inside NRSur7dq4's valid region ---
 total_mass = rng.uniform(60.0, 120.0)                    # Msun; >=60 keeps f_lower=20 Hz valid
 mass_ratio = rng.uniform(1.0, 3.0)                       # q = m1/m2 (NRSur7dq4 trained to ~4)
 MASS1 = total_mass * mass_ratio / (1.0 + mass_ratio)     # heavier component
@@ -259,17 +274,22 @@ t_l = t + dt_HL
 # 5. INJECT INTO aLIGO-COLOURED NOISE AT TARGET_SNR
 # ============================================================
 
-# --- Detector strains as TimeSeries (so the frequency-domain tools work directly) ---
-strain_h = f_plus * hp + f_cross * hc
+# --- Detector strains as TimeSeries (so frequency-domain tools work directly) ---
+# Both start from the same hp, hc. The physical H->L arrival delay is NOT
+# in these samples yet -- I add it explicitly below. Until then the two strains
+# are synchronous.
+strain_h = f_plus   * hp + f_cross   * hc
 strain_l = f_plus_l * hp + f_cross_l * hc
 
+n = len(strain_h)                                    # reference sample count
+
 # --- aLIGO design PSD on this data's frequency grid ---
-n = len(strain_h)
 delta_f = 1.0 / (n * DELTA_T)
 psd = aLIGOZeroDetHighPower(n // 2 + 1, delta_f, PSD_LOW_FREQ)
 
 # --- Rescale both strains by the SAME factor so the network SNR = TARGET_SNR ---
-# (Same factor preserves the H/L amplitude ratio, which carries sky information.)
+# One factor preserves the H/L amplitude ratio, which carries sky information.
+# (sigma is time-shift invariant, so it is fine to compute it before the shift.)
 sigma_h = sigma(strain_h, psd=psd, low_frequency_cutoff=PSD_LOW_FREQ)
 sigma_l = sigma(strain_l, psd=psd, low_frequency_cutoff=PSD_LOW_FREQ)
 network_sigma = np.sqrt(sigma_h ** 2 + sigma_l ** 2)
@@ -277,7 +297,22 @@ scale = TARGET_SNR / network_sigma
 strain_h *= scale
 strain_l *= scale
 
+# --- Physically delay the Livingston signal by the light-travel time dt_HL ---
+# cyclic_time_shift applies a frequency-domain phase ramp exp(-2*pi*i*f*dt), i.e.
+# strain(t - dt), sub-sample accurate. The FFT round-trip can nudge delta_t and
+# drop/add a sample, so we rebuild a clean TimeSeries pinned to the original
+# DELTA_T, length n, and epoch. Only the signal is shifted -- the noise is drawn
+# separately below and must NOT be delayed.
+start_l = strain_l.start_time
+shifted = strain_l.cyclic_time_shift(-dt_HL).numpy()
+if len(shifted) < n:
+    shifted = np.pad(shifted, (0, n - len(shifted)))   # pad tail (ringdown ~0 there)
+else:
+    shifted = shifted[:n]                              # or trim to length
+strain_l = TimeSeries(shifted, delta_t=DELTA_T, epoch=start_l)
+
 # --- Independent coloured noise per detector, added to the signal ---
+# Independent seeds: the two detectors' noise is physically uncorrelated.
 noise_h = noise_from_psd(n, DELTA_T, psd, seed=int(rng.integers(2 ** 31 - 1)))
 noise_l = noise_from_psd(n, DELTA_T, psd, seed=int(rng.integers(2 ** 31 - 1)))
 noise_h.start_time = strain_h.start_time
@@ -295,9 +330,8 @@ print(f"per-detector SNR: H={sigma_h*scale:.1f}, L={sigma_l*scale:.1f}  "
 
 bp_h = bandpass(data_h)
 bp_l = bandpass(data_l)
-clean_bp_h = bandpass(strain_h)                           # noise-free, for comparison
+clean_bp_h = bandpass(strain_h)                           
 clean_bp_l = bandpass(strain_l)
-
 white_h = whiten(bp_h)
 white_l = whiten(bp_l)
 
@@ -309,8 +343,23 @@ white_l = whiten(bp_l)
 fg = qp_frequency_grid(BANDPASS_LOW, BANDPASS_HIGH, Q_FIXED, P_BEST)
 qp_t, qp_f, qp_tf = qp_transform(white_h.numpy(), FS, fg, Q=Q_FIXED, p=P_BEST)
 
-t_merger_h, t_spread_h, power_t_h = merger_time_from_energy(qp_t, qp_f, qp_tf)
-print(f"Hanford merger time = {t_merger_h*1e3:.3f} ms  (energy spread {t_spread_h*1e3:.2f} ms)")
+t_merger_h, t_sigma_h, power_t_h = merger_time_from_energy(qp_t, qp_f, qp_tf)
+t_ref = qp_t[np.argmax(qp_tf.sum(axis=0))]             # same reference as the plot
+print(f"Hanford merger time = {(t_merger_h - t_ref)*1e3:+.3f} ms "
+      f"+/- {t_sigma_h*1e3:.2f} ms")
+
+# --- Livingston: same Qp-transform and energy-peak merger time ---
+qp_t_l, qp_f_l, qp_tf_l = qp_transform(white_l.numpy(), FS, fg, Q=Q_FIXED, p=P_BEST)
+t_merger_l, t_sigma_l, power_t_l = merger_time_from_energy(qp_t_l, qp_f_l, qp_tf_l)
+
+# --- Recovered H-L delay = difference of the two merger times ---
+# Both qp_t and qp_t_l are the same raw time grid, so the raw difference IS the delay.
+dt_HL_measured = t_merger_l - t_merger_h
+dt_sigma = np.sqrt(t_sigma_h**2 + t_sigma_l**2)   # errors add in quadrature
+
+print(f"\nInjected  H->L delay = {dt_HL*1e3:+.3f} ms")
+print(f"Recovered H->L delay = {dt_HL_measured*1e3:+.3f} ms +/- {dt_sigma*1e3:.2f} ms")
+print(f"Difference           = {(dt_HL_measured - dt_HL)*1e3:+.3f} ms")
 
 # --- Standard Q-transforms (for the diagnostic plots below) ---
 t_qh, f_qh, power_h = white_h.qtransform(delta_t=0.002, logfsteps=300,
