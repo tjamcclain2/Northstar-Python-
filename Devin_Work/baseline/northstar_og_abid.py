@@ -520,7 +520,6 @@ def generate_model_amplitudes_array(number_amplitude_combinations, gw_max_amps) 
 
 
 #=========================================================================
-
 def generate_model_detector_responses(
     signal_frequency,
     signal_lifetime,

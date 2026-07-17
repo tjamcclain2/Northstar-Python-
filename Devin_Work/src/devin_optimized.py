@@ -843,8 +843,8 @@ def run_northstar_pipeline(
     detector_sampling_rate=LIGO_DETECTOR_SAMPLING_RATE,
     gw_max_amps=1,
     max_noise_amp=0.1,
-    number_angular_samples=500,
-    number_amplitude_combinations=500,
+    number_angular_samples=2000,
+    number_amplitude_combinations=2000,
     warmup=True,
 ):
     """
@@ -956,7 +956,7 @@ def run_northstar_pipeline(
     for line in results:
         print(line)
 
-    results_dir = os.path.join(os.path.dirname(__file__), "Results")
+    results_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "results")
     os.makedirs(results_dir, exist_ok=True)
     with open(os.path.join(results_dir, "results.txt"), 'a') as f:
         for line in results:

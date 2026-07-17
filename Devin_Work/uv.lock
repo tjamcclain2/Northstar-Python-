@@ -27,6 +27,24 @@ wheels = [
 ]
 
 [[package]]
+name = "gprof2dot"
+version = "2025.4.14"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/bb/fd/cad13fa1f7a463a607176432c4affa33ea162f02f58cc36de1d40d3e6b48/gprof2dot-2025.4.14.tar.gz", hash = "sha256:35743e2d2ca027bf48fa7cba37021aaf4a27beeae1ae8e05a50b55f1f921a6ce", size = 39536, upload-time = "2025-04-14T07:21:45.76Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/71/ed/89d760cb25279109b89eb52975a7b5479700d3114a2421ce735bfb2e7513/gprof2dot-2025.4.14-py3-none-any.whl", hash = "sha256:0742e4c0b4409a5e8777e739388a11e1ed3750be86895655312ea7c20bd0090e", size = 37555, upload-time = "2025-04-14T07:21:43.319Z" },
+]
+
+[[package]]
+name = "graphviz"
+version = "0.21"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/f8/b3/3ac91e9be6b761a4b30d66ff165e54439dcd48b83f4e20d644867215f6ca/graphviz-0.21.tar.gz", hash = "sha256:20743e7183be82aaaa8ad6c93f8893c923bd6658a04c32ee115edb3c8a835f78", size = 200434, upload-time = "2025-06-15T09:35:05.824Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/91/4c/e0ce1ef95d4000ebc1c11801f9b944fa5910ecc15b5e351865763d8657f8/graphviz-0.21-py3-none-any.whl", hash = "sha256:54f33de9f4f911d7e84e4191749cac8cc5653f815b06738c54db9a15ab8b1e42", size = 47300, upload-time = "2025-06-15T09:35:04.433Z" },
+]
+
+[[package]]
 name = "line-profiler"
 version = "5.0.2"
 source = { registry = "https://pypi.org/simple" }
@@ -52,6 +70,8 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "cupy-cuda13x" },
+    { name = "gprof2dot" },
+    { name = "graphviz" },
     { name = "line-profiler" },
     { name = "numpy" },
     { name = "snakeviz" },
@@ -61,6 +81,8 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "cupy-cuda13x", specifier = "==14.1.1" },
+    { name = "gprof2dot", specifier = ">=2025.4.14" },
+    { name = "graphviz", specifier = ">=0.21" },
     { name = "line-profiler", specifier = ">=5.0.2" },
     { name = "numpy", specifier = "==2.5.0" },
     { name = "snakeviz", specifier = "==2.2.2" },
