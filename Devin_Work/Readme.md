@@ -1,12 +1,16 @@
-Subproject-2: GPU acceleration and memory-bandwidth optimization of a Python/NumPy pipeline
+# Subproject-2: GPU acceleration and memory-bandwidth optimization of a Python/NumPy pipeline
+**Author:** Devin Upadhyay
+**Last Updated:** 17 July 2026
 
-Overview (what was slow)
+## Overview (what was slow)
 
 Initially, the inherited code's runtime was dominated by two operations that scale with n_angles × n_amplitudes: building the model response grid and comparing it against the real signal. At the target size (500 angles × 500 amplitude combinations) these touch arrays of shape (n_angles, n_amplitudes, n_times, n_detectors) — multiple gigabytes for one array with billions of elements — and the comparison step in particular builds a huge intermediate array only to sum it away. The work is highly parallel but ran mostly serially on CPU, and a naive first CuPy port was actually slower than NumPy (too many tiny GPU launches and host↔device transfers). The goal was to exploit that parallelism: vectorize the math, move it to the GPU, and fuse the dominant operation into a custom kernel.
 
 For reference, all the outputs and performance improvement mentioned are on a (500 angles × 500 amplitude combination)
 
-Thought Process
+---
+
+## Thought Process
 Measure first, optimize second; I only wanted to touch what actually dominated runtime.
 1) Profiled the whole pipeline with cProfile + graphviz. generate_model_detector_responses and get_best_fit_angles_deltas dominated; everything else was negligible.
 2) Line-profiled those two functions with line_profiler and its @profile to find the exact bottleneck lines: in the best-fit step, the abs(real - model) + sum; in model generation, building the full response grid and the nested for loop.
@@ -18,7 +22,9 @@ Measure first, optimize second; I only wanted to touch what actually dominated r
 
 I benchmarked to calculate the times of the single and weighted best-fit steps separately (via cupyx.profiler.benchmark) because after fusion they dropped to sub-millisecond, where a single inline timer is mostly noise; benchmark handles GPU sync and runs warmed-up repeats for a stable per-stage number.
 
-Key results/ Findings
+---
+
+## Key results/ Findings
 Measured on an NVIDIA GeForce RTX 4070, at 500 angles × 500 amplitude combinations.
 
 |                 ---                 |   Time   | Speedup vs. NumPy baseline |
@@ -31,7 +37,9 @@ Measured on an NVIDIA GeForce RTX 4070, at 500 angles × 500 amplitude combinati
 - That fusion also eliminates a ~2.6 GB intermediate array per call, which is the actual source of the win: the bottleneck was memory bandwidth, not arithmetic.
 - Correctness held throughout: every function's GPU output matches the NumPy reference to rtol ≈ 1e-4 across the full correctness harness.
 
-Repo Structure
+---
+
+## Repo Structure
 
 Devin_Work/
 ├── src/                          # the optimized implementation (this subproject)
@@ -53,7 +61,9 @@ Devin_Work/
 ├── uv.lock
 └── Readme.md
 
-Installation/Environment
+---
+
+## Installation/Environment
 This subproject is managed with `uv`, pins Python `==3.14.6`, and requires an NVIDIA GPU with
 a CUDA-compatible driver (it depends on `cupy-cuda13x`).
 
@@ -67,7 +77,9 @@ are the sole source of truth for dependencies;
 Two of the dependencies (`gprof2dot`, `graphviz`) are only needed for generating the call-graph
 visualizations under `profile/` — not for running the pipeline itself. No need to bother yourself regarding them.
 
-How to reproduce
+---
+
+## How to reproduce
 Run the optimized pipeline (from `Devin_Work/`):
 
     uv run python src/devin_optimized.py
