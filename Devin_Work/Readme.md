@@ -7,7 +7,7 @@
 
 Initially, the inherited code's runtime was dominated by two operations that scale with n_angles × n_amplitudes: building the model response grid and comparing it against the real signal. At the target size (500 angles × 500 amplitude combinations) these touch arrays of shape (n_angles, n_amplitudes, n_times, n_detectors)—multiple gigabytes for one array with billions of elements—and the comparison step in particular builds a huge intermediate array only to sum it away. The work is highly parallel but ran mostly serially on CPU, and a naive first CuPy port was actually slower than NumPy (too many tiny GPU launches and host↔device transfers). The goal was to exploit that parallelism: vectorize the math, move it to the GPU, and fuse the dominant operation into a custom kernel.
 
-For reference, all the outputs and performance improvement mentioned are on a (500 angles × 500 amplitude combination)
+For reference, all the outputs and performance improvement mentioned are on a 500 angles × 500 amplitude combination.
 
 ---
 
@@ -25,8 +25,8 @@ I benchmarked to calculate the times of the single and weighted best-fit steps s
 
 ---
 
-## Key results/ Findings
-Measured on an NVIDIA GeForce RTX 4070, at 500 angles × 500 amplitude combinations.
+## Key Results
+Measured on an NVIDIA GeForce RTX 4070, at `500 angles × 500 amplitude combinations`.
 
 | Configuration                       | Time     | Speedup vs. NumPy baseline |
 | ----------------------------------- | -------- | -------------------------- |
@@ -69,8 +69,10 @@ This subproject is managed with `uv`, pins Python `==3.14.6`, and requires an NV
 a CUDA-compatible driver (it depends on `cupy-cuda13x`).
 
 If uv installed:
-    cd Devin_Work
-    uv sync
+
+`cd Devin_Work`
+
+`uv sync`
 
 That installs the exact pinned environment from `pyproject.toml`/`uv.lock` — those two files
 are the sole source of truth for dependencies;
@@ -80,7 +82,7 @@ visualizations under `profile/` (not for running the pipeline itself. No need to
 
 ---
 
-## How to reproduce
+## How To Reproduce
 Run the optimized pipeline (from `Devin_Work/`):
 
     uv run python src/devin_optimized.py
