@@ -10,6 +10,10 @@ horizons actually merge. the fall-off represents the ringdown. After merging, th
 hole that "rings" as it settles to a stationary Kerr state, radiating damped sinusoids (quasi-normal modes) at a
 frequency and decay time set by the final mass and spin. The energy drops off fast, so the curve falls steeply after
 the peak.
+
+One thing to consider is this is loudness in the detector's whitened frame, not raw astrophysical energy flux. Whitening 
+reweights every frequency by the noise PSD, so the curve reflects how loud the event is relative to how well your detector 
+hears each frequency. 
 """
 
 from pycbc.psd import from_string
