@@ -54,6 +54,35 @@ Devin_Work/
 └── Readme.md
 
 Installation/Environment
+This subproject is managed with `uv`, pins Python `==3.14.6`, and requires an NVIDIA GPU with
+a CUDA-compatible driver (it depends on `cupy-cuda13x`).
+
+If uv installed:
+    cd Devin_Work
+    uv sync
+
+That installs the exact pinned environment from `pyproject.toml`/`uv.lock` — those two files
+are the sole source of truth for dependencies;
+
+Two of the dependencies (`gprof2dot`, `graphviz`) are only needed for generating the call-graph
+visualizations under `profile/` — not for running the pipeline itself. No need to bother yourself regarding them.
 
 How to reproduce
+Run the optimized pipeline (from `Devin_Work/`):
+
+    uv run python src/devin_optimized.py
+
+`run_northstar_pipeline` takes a `warmup` flag (default `True`, steady-state framing). Pass
+`warmup=False` to get the honest cold-start number for a single fresh invocation instead.
+
+Run the correctness harness (must be run from inside `Tests/`, since it imports the other
+test modules by bare name):
+
+    cd Devin_Work/Tests
+    uv run python test_correctness.py
+
+Reproduce the baseline comparison by running `baseline/northstar_og_abid.py` and
+`src/devin_optimized.py` at the same problem size (500 angles × 500 amplitude combinations).
+
+
 
