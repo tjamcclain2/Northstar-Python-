@@ -43,8 +43,8 @@ F_LOW       = 20.0                 # analysis low-frequency cutoff (Hz)
 
 # True parameters of the injected source (our "ground truth"). Recovery code
 # downstream should reproduce these; that's how you know the pipeline works.
-MASS1, MASS2 = 85, 65             # component masses (solar masses)
-DISTANCE     = 1000                # Mpc -- larger distance -> weaker signal -> lower SNR
+MASS1, MASS2 = 30, 30             # component masses (solar masses)
+DISTANCE     = 300                # Mpc -- larger distance -> weaker signal -> lower SNR
 APPROXIMANT  = "IMRPhenomD"        # aligned-spin inspiral-merger-ringdown model; fast + standard
 MERGER_OFFSET = DURATION / 2.0     # put the merger mid-segment so it survives
                                    # both the conditioning crop and the SNR crop
@@ -152,37 +152,6 @@ white   = signal_in_noise.whiten(4, 4)
 white   = highpass(white, 30.0)
 white   = lowpass_fir(white, 300.0, 8)
 t_white = white.sample_times.numpy()
-
-# ------------------------------------------------------------------
-# Plot B: the injection (noise, signal+noise, whitened zoom)
-# ------------------------------------------------------------------
-# Three stacked panels tell the story: raw noise (chirp invisible) -> signal+noise
-# (still buried) -> whitened+bandpassed zoom (chirp finally visible near merger).
-fig2, (bn, bs, bw) = plt.subplots(3, 1, figsize=(12, 12))
-
-# Top: the colored noise on its own -- nothing to see, by design.
-bn.plot(noise.sample_times, noise, color="gray", lw=0.6)
-bn.set(title="Colored Gaussian LIGO noise (aLIGO design PSD)", xlabel="Time (s)", ylabel="Strain")
-bn.grid(alpha=0.3)
-
-# Middle: signal + noise. The red dashed line marks the true merger time; the
-# chirp is present but hidden under the noise at raw scale.
-bs.plot(signal_in_noise.sample_times, signal_in_noise, color="steelblue", lw=0.6)
-bs.axvline(merger_time, color="red", ls="--", lw=1, label="Merger")
-bs.set(title="Signal injected into noise", xlabel="Time (s)", ylabel="Strain")
-bs.legend(); bs.grid(alpha=0.3)
-
-# Bottom: zoom to a short window around the merger on the whitened data, where
-# the rising-frequency chirp is now clearly visible.
-mask = (t_white > merger_time - 0.5) & (t_white < merger_time + 0.1)
-bw.plot(t_white[mask], white.numpy()[mask], color="crimson", lw=1.0)
-bw.axvline(merger_time, color="red", ls="--", lw=1, label="Merger")
-bw.set(title="Whitened + Band-passed (30-300 Hz) - the chirp emerges",
-       xlabel="Time (s)", ylabel="Whitened strain (arb. units)")
-bw.legend(); bw.grid(alpha=0.3)
-plt.tight_layout()
-plt.savefig("pycbc_injection_plots.png", dpi=130, bbox_inches="tight")
-print("Figures saved.")
 
 # ------------------------------------------------------------------
 # (5) Q-TRANSFORM: time-frequency view of the injected chirp
