@@ -1,0 +1,130 @@
+"""
+The core problem of the FFT is that it tells you which frequencies are in a signal but not when they happen. The FFT
+assumes that the signal is stationary that its frequency content doesn't change over the observation. The STFT fixes
+this because it chops the signal into short overlapping windows and FFT's each one separately. Within a short enough
+window the signal is approximately stationary, so its local FFT is meaningful, and stacking those local spectra side by
+side gives the frequency as a function of time. That 2-D picture is the spectrogram, and for the merger it's what makes
+the rising chirp track actually visible.
+
+The STFT you choose your time vs frequency resolution, and it's the same everywhere on the plane. Though it fixes the
+window the behavior is at least predictable and you know precisely what resolution you're getting.
+
+The STFT gives a single fixed resolution across the whole plane, so it's excellent when the interesting features live
+in a known band and timescale (like a merger under 200 Hz), and weaker when a signal spans many octaves and needs sharp
+timing at high frequency and sharp frequency at low frequency at once — which is the gap wavelets and the
+Q-transform fill.
+"""
+from pycbc.waveform import get_td_waveform
+import matplotlib
+matplotlib.use("Agg")                 # headless backend: render straight to PNG, no GUI window
+import matplotlib.pyplot as plt
+import numpy as np
+from scipy.signal import stft         # STFT lives in scipy.signal, not PyCBC
+import warnings
+warnings.filterwarnings("ignore")     # suppress PyCBC/matplotlib deprecation chatter
+
+# ------------------------------------------------------------------
+# A signal to analyse (a TimeSeries)
+# ------------------------------------------------------------------
+# get_td_waveform returns a time-domain CBC waveform (plus/cross). By PyCBC
+# convention the merger sits at t = 0, so sample_times start NEGATIVE (the
+# inspiral occupies the seconds before zero). That sign convention matters in
+# step (4) when we line the STFT time axis up with the signal.
+#   SEOBNRv4  : an accurate aligned-spin inspiral-merger-ringdown model
+#               (slower but higher-fidelity than IMRPhenomD).
+#   distance= 400 Mpc : closer than 1000 Mpc -> louder signal, cleaner chirp.
+ts, _ = get_td_waveform(
+    approximant="SEOBNRv4",
+    mass1=85, mass2=65,               # component masses (solar masses)
+    distance=400,                     # Mpc -- smaller distance -> stronger signal
+    delta_t=1.0 / 4096,               # time step (s) -> 4096 Hz sample rate
+    f_lower=20.0,                     # start the waveform at 20 Hz
+)
+
+# ------------------------------------------------------------------
+# (2) Frequency domain via PyCBC's FFT
+# ------------------------------------------------------------------
+# One FFT of the whole signal: tells you WHICH frequencies are present and how
+# strong, but NOT when each one occurs (time information is collapsed away).
+# Useful here as a spectral sanity check on the clean waveform.
+fseries = ts.to_frequencyseries()     # forward FFT (real-input rFFT layout)
+freqs   = fseries.sample_frequencies  # frequency axis (Hz)
+fft_amp = abs(fseries)                # |FFT| = spectral amplitude per bin
+
+print(f"FFT length      : {len(fseries)} bins")
+print(f"Freq resolution : {fseries.delta_f:.3f} Hz")
+# Peak sits LOW, not at the merger: the long inspiral dominates the total energy
+# (amplitude scales ~ f^-7/6), so most spectral power piles up at low frequency.
+print(f"Peak frequency  : {freqs[fft_amp.numpy().argmax()]:.1f} Hz")
+
+# ------------------------------------------------------------------
+# (3) Inverse FFT via PyCBC -- back to time domain
+# ------------------------------------------------------------------
+# Round-trip test: FFT then IFFT should return the original to floating-point
+# precision (~1e-13). Confirms the transform pair is consistent before we rely
+# on frequency-domain operations elsewhere. Trim to len(ts) because the rFFT
+# layout can hand back one extra sample for odd-length inputs.
+ts_ifft = fseries.to_timeseries()     # inverse FFT
+residual = ts.numpy() - ts_ifft.numpy()[:len(ts)]
+print(f"Max reconstruction error: {abs(residual).max():.3e}")
+
+# ------------------------------------------------------------------
+# (4) Short-Time Fourier Transform (STFT) -> spectrogram
+#     Instead of one FFT over everything, slide a short window along the signal
+#     and FFT each chunk. The result is frequency content AS A FUNCTION OF TIME,
+#     which is exactly what a chirp needs: for a binary-black-hole merger this
+#     traces the upward-sweeping "chirp" track.
+# ------------------------------------------------------------------
+strain = ts.numpy()
+fs     = 1.0 / ts.delta_t             # sample rate = 4096 Hz
+
+# The two key STFT knobs -- together they set the time/frequency tradeoff:
+#   nperseg  : window length in samples. Longer window -> finer FREQUENCY
+#              resolution but coarser TIME resolution (and vice versa).
+#              256 samples at 4096 Hz ~= 62.5 ms per window.
+#   noverlap : how much consecutive windows overlap. 87.5% overlap oversamples
+#              the time axis, giving a smoother-looking image (it does NOT add
+#              real resolution -- that's fixed by nperseg).
+nperseg  = 256                        # window length (samples) ~62.5 ms
+noverlap = nperseg * 7 // 8           # 87.5% overlap -> smooth image
+
+# window="hann" tapers each chunk to zero at its edges, which suppresses
+# spectral leakage (spurious energy smeared across bins from the hard cutoff
+# of a rectangular window).
+f_stft, t_stft, Zxx = stft(
+    strain,
+    fs=fs,
+    window="hann",
+    nperseg=nperseg,
+    noverlap=noverlap,
+)
+
+# scipy's STFT time axis starts at 0. Shift it by the signal's own start time
+# (negative, since PyCBC puts t=0 at the merger) so the spectrogram lines up
+# with the waveform's timeline and the chirp ends at t=0.
+t_stft = t_stft + float(ts.sample_times[0])
+
+mag = np.abs(Zxx)                     # |STFT| magnitude -> what we plot
+print(f"STFT shape      : {mag.shape} (freq bins x time frames)")
+
+# ------------------------------------------------------------------
+# Plot: STFT spectrogram
+#   NOTE: an earlier version of this comment described a 2x2 grid (time-domain,
+#   FFT, IFFT, spectrogram). The code below only builds the single spectrogram
+#   panel. If you want the full 2x2, change to plt.subplots(2, 2) and draw the
+#   other three panels; otherwise this comment is the only thing to fix.
+# ------------------------------------------------------------------
+fig, ax_s = plt.subplots(1, 1, figsize=(15, 9))   # (the extra parens around ax_s were harmless but unnecessary)
+
+# pcolormesh draws the time-frequency energy map; gouraud shading interpolates
+# between tiles for a smooth image. ylim caps the view at 200 Hz because the
+# 150 Msun merger lives low -- the interesting track sits well under 200 Hz.
+pcm = ax_s.pcolormesh(t_stft, f_stft, mag, shading="gouraud", cmap="viridis")
+ax_s.set(title="STFT Spectrogram (the chirp)",
+         xlabel="Time (s)", ylabel="Frequency (Hz)", ylim=(0, 200))
+cbar = fig.colorbar(pcm, ax=ax_s)
+cbar.set_label("|STFT| magnitude")
+
+plt.tight_layout()
+plt.savefig("stft_plots.png", dpi=130, bbox_inches="tight")
+print("Figure saved.")
