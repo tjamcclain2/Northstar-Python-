@@ -1,0 +1,273 @@
+"""
+    1.  Build colored Gaussian noise from an analytic Advanced-LIGO PSD.
+    1b. Generate a known IMRPhenomD chirp waveform (the "ground truth").
+    2.  Forward FFT of the clean waveform  -> inspect its spectrum.
+    3.  Inverse FFT                        -> verify a lossless round trip.
+    4.  Inject the chirp into the noise, then whiten + band-pass to expose it.
+    5.  FFT->IFFT round trip on the whitened data (numerical self-check).
+    6.  Recover the signal two independent ways:
+          (a) overlay the whitened data against an identically-whitened
+              copy of the injected template  (visual / correlation check),
+          (b) matched filter against a canonical template
+              (rigorous SNR-based confirmation).
+
+Because the injection is controlled, every recovered quantity (merger time,
+peak SNR, waveform correlation) has a known true value to check against.
+"""
+
+from pycbc.psd import from_string
+from pycbc.noise import noise_from_psd
+from pycbc.types import TimeSeries
+from pycbc.filter import highpass, lowpass_fir
+from pycbc.waveform import get_td_waveform
+import matplotlib
+matplotlib.use("Agg")                 # headless backend: render to file, no GUI/display
+import matplotlib.pyplot as plt
+import warnings
+warnings.filterwarnings("ignore")     # PyCBC/NumPy chatter clutters the console; silence it
+
+# --------------------------------------------------------------------------
+# 0. Configuration
+# --------------------------------------------------------------------------
+SAMPLE_RATE = 4096                 # Hz -- samples per second; sets the Nyquist limit (2048 Hz)
+DELTA_T     = 1.0 / SAMPLE_RATE    # s  -- spacing between time samples
+DURATION    = 32                   # seconds of data in the analysis segment
+F_LOW       = 20.0                 # analysis low-frequency cutoff (Hz); below this the
+                                   # detector is blind, so we neither generate nor filter it
+
+# True parameters of the injected source (our "ground truth").
+MASS1, MASS2 = 65, 85              # solar masses. Heavier binary => lower merger frequency
+                                   # and a short, low-f chirp (total mass 150 M_sun here).
+DISTANCE     = 1000                # Mpc -- primary knob on injected SNR (SNR ~ 1/distance)
+APPROXIMANT  = "IMRPhenomD"        # aligned-spin inspiral-merger-ringdown model; fast + standard
+MERGER_OFFSET = DURATION / 2.0     # intended merger placement: mid-segment, so the coalescence
+                                   # survives both the whitening crop and the SNR crop below.
+                                   # (Step 4 recomputes this as merger_time from the noise object.)
+NOISE_SEED   = 400                 # fixes the pseudo-random noise realization -> reproducible runs
+
+# Scalar applied to the noise amplitude. Because SNR is (signal / noise), scaling the
+# noise is a *hidden inverse SNR knob*: NOISE_SCALE = 0.5 halves the noise and therefore
+# roughly doubles the recovered SNR relative to design sensitivity. Set to 1.0 for the
+# true aLIGO design-noise level.
+NOISE_SCALE  = .5
+
+TLEN = DURATION * SAMPLE_RATE      # total number of time samples in the segment
+FLEN = TLEN // 2 + 1               # number of one-sided (real-FFT) frequency bins
+DELTA_F = 1.0 / DURATION           # Hz -- frequency resolution (1 / total observation time)
+
+
+# --------------------------------------------------------------------------
+# 1. Colored Gaussian noise from an analytic PSD
+# --------------------------------------------------------------------------
+# aLIGOZeroDetHighPower is the Advanced LIGO "design sensitivity" curve --
+# the PSD (power spectral density) that shapes the noise so it has the same
+# frequency-dependent amplitude as a real detector at design performance.
+psd_for_noise = from_string("aLIGOZeroDetHighPower", FLEN, DELTA_F, F_LOW)
+# Draw a Gaussian noise realization whose spectrum matches that PSD, then scale it.
+noise = noise_from_psd(TLEN, DELTA_T, psd_for_noise, seed=NOISE_SEED) * NOISE_SCALE
+noise.start_time = 0.0             # anchor the segment to t = 0 for clean index arithmetic later
+print(f"Generated noise : {len(noise)} samples, {noise.duration:.4f} s")
+
+
+# --------------------------------------------------------------------------
+# 1b. Generate the CBC waveform  (THIS WAS MISSING -> nothing was 'ts')
+# --------------------------------------------------------------------------
+# get_td_waveform returns the plus/cross polarisations sampled at delta_t.
+# By convention the merger sits at t = 0, so the epoch (start_time) is
+# negative: the inspiral occupies the negative-time samples before coalescence.
+hp, hc = get_td_waveform(approximant=APPROXIMANT,
+                         mass1=MASS1, mass2=MASS2,
+                         distance=DISTANCE,
+                         delta_t=DELTA_T, f_lower=F_LOW)
+ts = hp                            # use the plus polarisation as the injected signal
+print(f"Waveform        : {len(ts)} samples, {ts.duration:.4f} s")
+
+
+# ------------------------------------------------------------------
+# (2) Frequency domain via PyCBC's FFT
+# ------------------------------------------------------------------
+# to_frequencyseries() runs a real FFT: time-domain strain -> complex spectrum.
+fseries = ts.to_frequencyseries()
+freqs   = fseries.sample_frequencies     # the frequency axis (Hz) for each bin
+fft_amp = abs(fseries)                    # magnitude spectrum (drop phase)
+print(f"FFT length      : {len(fseries)} bins")
+print(f"Freq resolution : {fseries.delta_f:.3f} Hz")
+# The amplitude peak sits low (inspiral energy scales ~ f^-7/6), NOT at the
+# merger frequency -- most of the signal's *energy* lives in the long inspiral.
+print(f"Peak frequency  : {freqs[fft_amp.numpy().argmax()]:.1f} Hz")
+
+# ------------------------------------------------------------------
+# (3) Inverse FFT via PyCBC — back to time domain
+# ------------------------------------------------------------------
+# Round-trip check: IFFT(FFT(x)) should equal x to floating-point precision.
+ts_ifft = fseries.to_timeseries()
+residual = ts.numpy() - ts_ifft.numpy()[:len(ts)]
+print(f"Max reconstruction error: {abs(residual).max():.3e}")   # expect ~1e-13 (machine noise)
+
+# ------------------------------------------------------------------
+# (4) INJECT the signal into the colored Gaussian noise.
+#     (Original code tried to read an undefined NOISE_FILE from disk;
+#      we inject into the PSD noise generated in step 1 instead.)
+# ------------------------------------------------------------------
+merger_time = noise.duration / 2.0        # where we want the merger to land (mid-segment)
+
+# Position the waveform so its t=0 (the merger) sits at merger_time in the segment.
+# ts.start_time < 0, so adding merger_time slides the whole chirp to the right.
+ts_shifted = ts.copy()
+ts_shifted.start_time = float(ts.start_time) + merger_time
+
+# Add the (shifted) signal samples into the noise array, clipping to the
+# segment bounds so nothing falls off either edge.
+data = noise.numpy().copy()
+sig  = ts_shifted.numpy()
+# Sample index in the noise array where the waveform's first sample belongs:
+start_idx = int(round((float(ts_shifted.start_time) - float(noise.start_time)) * SAMPLE_RATE))
+lo = max(start_idx, 0)                    # clamp to the start of the array
+hi = min(start_idx + len(sig), len(data)) # clamp to the end of the array
+data[lo:hi] += sig[lo - start_idx: hi - start_idx]   # overlay signal onto noise
+signal_in_noise = TimeSeries(data, delta_t=DELTA_T, epoch=noise.start_time)
+print(f"Injected merger at t = {merger_time:.3f} s")
+
+# Whiten + band-pass to reveal the chirp buried in the noise.
+# whiten(4, 4): estimate the PSD in 4 s chunks and use a 4 s whitening filter.
+# Whitening flattens the noise spectrum (equal power at all frequencies) so the
+# signal is no longer masked by loud low-frequency noise.
+white   = signal_in_noise.whiten(4, 4)
+white   = highpass(white, 30.0)           # kill residual low-f content below the band of interest
+white   = lowpass_fir(white, 300.0, 8)    # kill high-f content above it (8 = filter order)
+t_white = white.sample_times.numpy()
+
+# ==================================================================
+# (5) IFFT of the whitened + band-passed data
+# ------------------------------------------------------------------
+# `white` is already time-domain, so a lone inverse FFT has nothing to
+# invert. The meaningful operation (mirrors steps 2 & 3) is the round
+# trip:  white --FFT--> white_fseries --IFFT--> white_ifft
+# ==================================================================
+white_fseries = white.to_frequencyseries()
+white_ifft    = white_fseries.to_timeseries()
+_res = white.numpy() - white_ifft.numpy()[:len(white)]
+print(f"Whitened IFFT reconstruction error: {abs(_res).max():.3e}")   # again expect ~1e-13
+
+# ==================================================================
+# (6) COMPARE the IFFT'd data to the injected GW
+# ------------------------------------------------------------------
+#  (a) overlay the recovered whitened chirp with the injected template,
+#      whitened + band-passed the SAME way (frequency-domain division
+#      by the estimated PSD)
+#  (b) matched filter -> SNR peak lands at the injected merger time,
+#      the rigorous confirmation the template is in the data
+# ==================================================================
+import numpy as np
+from pycbc.psd import interpolate, inverse_spectrum_truncation
+from pycbc.filter import matched_filter
+
+# Estimate the PSD *from the data* (the same idea .whiten() uses internally).
+psd_est = interpolate(signal_in_noise.psd(4), signal_in_noise.delta_f)   # 4 s Welch estimate
+# inverse_spectrum_truncation limits the whitening filter's time-domain length,
+# preventing PSD estimation artifacts from spreading (wrap-around) contamination.
+psd_est = inverse_spectrum_truncation(psd_est, int(4 * signal_in_noise.sample_rate),
+                                       low_frequency_cutoff=F_LOW)
+
+def whiten_fd(series, psd):
+    """Whiten a TimeSeries by an explicit PSD (frequency-domain division).
+
+    Dividing the spectrum by sqrt(PSD) is whitening by definition: it
+    normalizes each frequency bin to unit noise power. Doing it explicitly
+    (rather than via .whiten()) lets us apply the *same* PSD to the template.
+    """
+    fs = series.to_frequencyseries()
+    p  = interpolate(psd, fs.delta_f)     # match PSD resolution to the series
+    n  = min(len(fs), len(p))             # guard against off-by-one length mismatch
+    return (fs[:n] / p[:n] ** 0.5).to_timeseries()
+
+# (a) A pure copy of the injected signal, placed at the merger and whitened +
+#     band-passed *identically* to the data -> the fairest shape comparison.
+templ = TimeSeries(np.zeros(len(signal_in_noise)), delta_t=DELTA_T,
+                   epoch=signal_in_noise.start_time)
+templ.numpy()[lo:hi] = ts_shifted.numpy()[lo - start_idx: hi - start_idx]
+templ_w = lowpass_fir(highpass(whiten_fd(templ, psd_est), 30.0), 300.0, 8)
+
+# (b) Matched filter. This is the optimal linear detector for a known signal
+#     in Gaussian noise: it correlates a template against the data, weighted
+#     by 1/PSD, and reports SNR as a function of merger time.
+hp2, _ = get_td_waveform(approximant=APPROXIMANT, mass1=MASS1, mass2=MASS2,
+                         distance=DISTANCE, delta_t=DELTA_T, f_lower=F_LOW)
+hp2.resize(len(signal_in_noise))          # template must match the data length for the FFT
+# cyclic_time_shift by hp2.start_time (negative) wraps the merger to array index 0,
+# the canonical placement. Without this the SNR peak would be offset by the template
+# epoch, and its time would not correspond directly to the true merger time.
+snr = matched_filter(hp2.cyclic_time_shift(hp2.start_time), signal_in_noise,
+                     psd=psd_est, low_frequency_cutoff=F_LOW).crop(4, 4)   # drop filter-edge junk
+ip         = abs(snr).numpy().argmax()    # index of the loudest point = best-fit merger time
+snr_peak_t = float(snr.sample_times[ip])
+snr_peak   = float(abs(snr[ip]))
+print(f"Matched-filter peak SNR : {snr_peak:.1f} at t = {snr_peak_t:.3f} s "
+      f"(injected merger = {merger_time:.1f} s)")   # the two times should agree
+
+# ------------------------------------------------------------------
+# Plot C: IFFT of whitened+band-passed data vs injected GW  +  matched-filter SNR
+# ------------------------------------------------------------------
+fig3, (axL, axR) = plt.subplots(1, 2, figsize=(15, 5.5))
+
+# Zoom to a short window bracketing the merger so the chirp is actually visible.
+tI = white_ifft.sample_times.numpy()
+tT = templ_w.sample_times.numpy()
+w0, w1 = merger_time - 0.18, merger_time + 0.05   # ~180 ms before to 50 ms after merger
+mI = (tI > w0) & (tI < w1)                         # boolean mask for the data window
+mT = (tT > w0) & (tT < w1)                         # boolean mask for the template window
+rec = white_ifft.numpy()[mI]
+tmp = templ_w.numpy()[mT]
+# The two whitening paths (.whiten vs whiten_fd) use different normalizations,
+# so rescale the template to the data's RMS to compare *shape*, not amplitude.
+scale = rec.std() / tmp.std()
+
+axL.plot(tI[mI], rec, color="crimson", lw=1.8,
+         label="IFFT of whitened+band-passed data")
+axL.plot(tT[mT], tmp * scale, color="black", ls="--", lw=1.3,
+         label="Injected GW template (whitened, scaled)")
+axL.axvline(merger_time, color="gray", ls=":", lw=1)   # mark the true merger time
+# Pearson correlation of the two curves -> close to 1.0 means the recovered
+# waveform matches the injected one in shape.
+corr = np.corrcoef(rec, tmp[:len(rec)])[0, 1]
+axL.text(0.03, 0.05, f"waveform correlation = {corr:.3f}",
+         transform=axL.transAxes, fontsize=11,
+         bbox=dict(boxstyle="round", fc="white", ec="gray"))
+axL.set(title="IFFT of whitened+band-passed data vs. injected GW",
+        xlabel="Time (s)", ylabel="Whitened strain (arb. units)")
+axL.legend(loc="upper left", fontsize=9); axL.grid(alpha=0.3)
+
+# Right panel: the full SNR time series with its peak annotated.
+axR.plot(snr.sample_times, abs(snr), color="steelblue", lw=1.0)
+axR.axvline(snr_peak_t, color="red", ls="--", lw=1,
+            label=f"peak SNR = {snr_peak:.0f} @ {snr_peak_t:.2f}s")
+axR.set(title="Matched-filter SNR (is the injected GW in the data?)",
+        xlabel="Time (s)", ylabel="|SNR|")
+axR.legend(loc="upper right"); axR.grid(alpha=0.3)
+
+plt.tight_layout()
+plt.savefig("Matched_filter.png", dpi=140, bbox_inches="tight")
+print(f"Recovery check saved. Left-panel waveform correlation = {corr:.3f}")
+
+# ------------------------------------------------------------------
+# Plot: amplitude vs time (left)  and  amplitude vs frequency (right)
+# ------------------------------------------------------------------
+# Three views of the *clean* injected waveform: time domain, its spectrum,
+# and the IFFT round trip -- a visual companion to the numeric checks above.
+fig, (ax_t, ax_f, ax_i) = plt.subplots(1, 3, figsize=(18, 5))
+
+# Left: the raw chirp in time -- amplitude and frequency both sweep up to merger.
+ax_t.plot(ts.sample_times, ts, color="steelblue", lw=0.9)
+ax_t.set(title="Amplitude vs Time (original)", xlabel="Time (s)", ylabel="Strain")
+ax_t.grid(alpha=0.3)
+
+# Middle: the magnitude spectrum on a log axis; note the power piling up at low f.
+ax_f.semilogy(freqs, fft_amp, color="darkorange", lw=0.9)
+ax_f.set(title="Amplitude vs Frequency (PyCBC FFT)",
+         xlabel="Frequency (Hz)", ylabel="|FFT| amplitude", xlim=(10, 150))
+ax_f.grid(alpha=0.3, which="both")
+
+# Right: IFFT of the spectrum -- should be visually identical to the left panel.
+ax_i.plot(ts_ifft.sample_times, ts_ifft, color="seagreen", lw=0.9)
+ax_i.set(title="Amplitude vs Time (PyCBC IFFT)", xlabel="Time (s)", ylabel="Strain")
+ax_i.grid(alpha=0.3)
