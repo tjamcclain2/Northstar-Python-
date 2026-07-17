@@ -1,3 +1,23 @@
+"""
+The Q-Transform is a time frequency series analysis method that decomposes a signal onto a logarithmically spaced
+frequency axis. The output shows how signal energy is disturbed across frequency over time and the method s used to
+search for statistically significant excess power against a noise background.
+
+The Q-transform is a constant-Q, wavelet-style transform: where the STFT involves the signal with a fixed-width window
+at every frequency, the Q-transform uses a window whose width scales with frequency. That adaptivity is the reason I
+used it for a compact-binary signal. A fixed STFT window forces a single compromise across the whole track: resolve
+the early inspiral and you blur the merger, or resolve the merger and you over-chop the inspiral.
+
+It is important to note that you have to whiten the data first because the Q-scan runs normally on whitened data so that
+under Gaussian noise the normalized tile energies follow a normal distribution. Meaning that a tile is significant when
+its energy sits far in the distributions tail.
+
+The Q-transform works best on loud (SNR ≳ 8–10), stellar-mass compact-binary mergers whose frequency sweeps widely
+through the sensitive band and fits comfortably inside the analysis segment — and it's least useful for faint signals,
+very heavy merger-dominated systems, and anything narrowband. For example Q transform works best for GW150914, roughly
+30 + 30 M☉ at a few hundred Mpc. Faint, far-away signals that matched filtering still recovers cleanly will be
+invisible or ambiguous in a Q-scan.
+"""
 from pycbc.psd import from_string
 from pycbc.noise import noise_from_psd
 from pycbc.types import TimeSeries
