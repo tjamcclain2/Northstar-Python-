@@ -21,7 +21,7 @@ Measure first, optimize second; I only wanted to touch what actually dominated r
 6) Verified correctness after every change against the original NumPy reference (`rtol ≈ 1e-4 for fp32`). Because of the changed shapes, fused kernel and the fp32, I maintained a correctness harness that compares every function's GPU output against the original NumPy reference implementation.
 7) Distinguished cold-start cost from steady-state cost. The first CUDA call in any process pays a one-time tax (cuSOLVER/cuRAND handle creation, NVRTC kernel JIT-compilation) that has nothing to do with the algorithm itself. A single fresh invocation is ~5× slower than a second call in the same process. Since these represent genuinely different real-world usage patterns (a one-shot script run vs. many calls from a long-lived process, e.g. a Monte Carlo loop), reporting only one number would misrepresent the other, so the pipeline takes an explicit warmup flag and both numbers are reported separately below.
 
-I benchmarked to calculate the times of the single and weighted best-fit steps separately (via cupyx.profiler.benchmark) because after fusion they dropped to sub-millisecond, where a single inline timer is mostly noise; benchmark handles GPU sync and runs warmed-up repeats for a stable per-stage number.
+I benchmarked to calculate the times of the single and weighted best-fit steps separately (via `cupyx.profiler.benchmark`) because after fusion they dropped to sub-millisecond, where a single inline timer is mostly noise; benchmark handles GPU sync and runs warmed-up repeats for a stable per-stage number.
 
 ---
 
@@ -40,7 +40,7 @@ Measured on an NVIDIA GeForce RTX 4070, at `500 angles × 500 amplitude combinat
 
 ---
 
-## Repo Structure
+## Directory Structure
 ```
 Devin_Work/
 ├── src/                          # the optimized implementation (this subproject)
