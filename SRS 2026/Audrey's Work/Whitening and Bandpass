@@ -1,3 +1,25 @@
+"""
+Whitening and bandpassing are two conditioning steps that turn raw noisy detector data into something where a chirp is
+visible.
+
+Whitening flattens the noise spectrum. Real detector noise is strongly "colored" the aLIGOZeroDetHighPower PSD in the
+code has enormous power at low frequency. Low frequency noise would completely dominate everything in a raw strain and
+whitening divides the data in the frequency domain by the noise amplitude spectral density. The effect is that each
+frequency's contribution is now measured relative to how noisy the detector is there: quiet, sensitive bands get
+emphasized, loud noisy bands get suppressed, and a signal that was buried under the colored floor emerges.
+
+Bandpassing then restricts to the band that actually carries signal. In this code the highpass(30) removes residual
+sub-30 Hz content (low-frequency junk and whitening artifacts near the f_low edge), and lowpass_fir(300, 8)
+removes everything above 300 Hz.
+
+The reason that this is effective because whitening converts a hard colored-noise problem into an easy white-noise one.
+Bandpassing adds to this by discarding bands that contribute only noise, which improves the signal-to-noise ratio of
+what remains and makes the chirp legible to both a matched filter and the eye.
+
+For certain noise levels the whitening and bandpass eventually break down. For bandpassing it is important to note that
+it is signal dependent so the wrong choice throws away real signal. 300 Hz lowpass is fine for a heavy black-hole
+merger, but it would destroy a binary-neutron-star signal that sweeps up to a kilohertz.
+"""
 from pycbc.psd import from_string
 from pycbc.noise import noise_from_psd
 from pycbc.types import TimeSeries
